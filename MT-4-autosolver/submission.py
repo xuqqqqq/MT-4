@@ -36,7 +36,7 @@ class Instance(object):
         self.by_task_set = by_task_set
 
 
-def solve(input_text):
+def solve(input_text: str) -> list:
     """Contest entrypoint: return [(task_id_list_str, [courier_id, ...]), ...]."""
 
     instance = parse_input(input_text)
