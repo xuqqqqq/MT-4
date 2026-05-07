@@ -15,6 +15,8 @@ from pathlib import Path
 
 from autosolver.evaluator import Evaluator, Objective
 from autosolver.features import InstanceFeatures, extract_instance_features
+from autosolver.algorithm_generation import AlgorithmGenerator, TemplateAlgorithmGenerator
+from autosolver.generated_solver import HeuristicSpec, specs_to_solvers
 from autosolver.model import Assignment, Instance
 from autosolver.portfolio import PortfolioReport, PortfolioSolver
 from autosolver.solvers import Solver, default_solvers
@@ -26,6 +28,7 @@ class AgentDecision:
     scenario_tags: tuple[str, ...]
     rationale: tuple[str, ...]
     features: InstanceFeatures
+    generated_specs: tuple[HeuristicSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,7 @@ class AgentMemory:
             "selected_solvers": list(report.decision.selected_solvers),
             "scenario_tags": list(report.decision.scenario_tags),
             "rationale": list(report.decision.rationale),
+            "generated_specs": [spec.to_dict() for spec in report.decision.generated_specs],
             "best_solver": report.portfolio.best_solver,
             "objective": {
                 "expected_accepted": report.objective.expected_accepted,
@@ -88,15 +92,21 @@ class HeurAgenixLiteAgent:
         evaluator: Evaluator | None = None,
         time_limit_sec: float = 9.0,
         memory: AgentMemory | None = None,
+        algorithm_generator: AlgorithmGenerator | None = None,
+        generated_count: int = 0,
     ) -> None:
         self.solver_pool = tuple(solvers or default_solvers())
         self.evaluator = evaluator or Evaluator()
         self.time_limit_sec = time_limit_sec
         self.memory = memory or AgentMemory()
+        self.algorithm_generator = algorithm_generator
+        self.generated_count = generated_count
 
     def solve(self, instance: Instance) -> AgentReport:
         decision = self.decide(instance)
-        selected = [solver for solver in self.solver_pool if solver.name in decision.selected_solvers]
+        generated_solvers = specs_to_solvers(decision.generated_specs)
+        pool = tuple(self.solver_pool) + tuple(generated_solvers)
+        selected = [solver for solver in pool if solver.name in decision.selected_solvers]
         portfolio = PortfolioSolver(
             solvers=selected,
             evaluator=self.evaluator,
@@ -115,6 +125,7 @@ class HeurAgenixLiteAgent:
         features = extract_instance_features(instance)
         selected: list[str] = []
         rationale: list[str] = []
+        generated_specs: tuple[HeuristicSpec, ...] = ()
 
         self._add(selected, "order_greedy", rationale, "fast coverage baseline")
         self._add(selected, "regret_greedy", rationale, "protect orders with fragile best-candidate gaps")
@@ -149,13 +160,28 @@ class HeurAgenixLiteAgent:
             for name in ("marginal_probability", "coverage_then_marginal", "local_search"):
                 self._add(selected, name, rationale, "fallback solver for selector robustness")
 
-        available = {solver.name for solver in self.solver_pool}
+        if self.generated_count > 0:
+            generator = self.algorithm_generator or TemplateAlgorithmGenerator()
+            try:
+                generated_specs = tuple(generator.generate(instance, self.generated_count))
+                for spec in generated_specs:
+                    self._add(
+                        selected,
+                        f"generated_{spec.name}",
+                        rationale,
+                        f"API-generated heuristic spec: {spec.description or 'no description'}",
+                    )
+            except Exception as exc:
+                rationale.append(f"algorithm_generation_failed: {exc}")
+
+        available = {solver.name for solver in self.solver_pool} | {f"generated_{spec.name}" for spec in generated_specs}
         selected = [name for name in selected if name in available]
         return AgentDecision(
             selected_solvers=tuple(selected),
             scenario_tags=features.scenario_tags,
             rationale=tuple(rationale),
             features=features,
+            generated_specs=generated_specs,
         )
 
     def _add(self, selected: list[str], name: str, rationale: list[str], reason: str) -> None:

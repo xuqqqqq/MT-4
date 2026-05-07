@@ -10,6 +10,9 @@ the code is organized around replaceable adapters:
 - `autosolver.generators`: synthetic cases for development and regression.
 - `autosolver.solvers`: baseline greedy, random, marginal-probability, bundle,
   and local-search solvers.
+- `autosolver.algorithm_generation`: API-driven heuristic generation. The API
+  returns bounded JSON specs, not executable Python code.
+- `autosolver.generated_solver`: safe interpreter for generated heuristic specs.
 - `autosolver.portfolio`: time-budgeted multi-solver runner that keeps the best
   feasible result.
 - `autosolver.io`: internal JSON adapter to be replaced or wrapped when the
@@ -62,6 +65,26 @@ Run the HeurAgenix-lite agent selector:
 python -m autosolver --stress-case complex_mixed_city --agent --time-limit 9
 python scripts/run_experiments.py --stress-only --agent --time-limit 9
 ```
+
+Generate new heuristic specs before solving:
+
+```powershell
+python -m autosolver --case multi_offer_probability --agent --generate-algorithms 3 --print-generated-specs
+python scripts/run_experiments.py --agent --generate-algorithms 3 --time-limit 9
+```
+
+Use an external OpenAI-compatible generation API:
+
+```powershell
+$env:AUTOSOLVER_LLM_API_KEY = "your-api-key"
+$env:AUTOSOLVER_LLM_MODEL = "your-model-name"
+python -m autosolver --stress-case complex_mixed_city --agent --generate-algorithms 4 --algorithm-generator openai-compatible
+```
+
+The external API is asked to return JSON heuristic specs only. The runtime does
+not execute generated source code; it converts validated specs into
+`GeneratedGreedySolver` instances and lets the portfolio evaluator keep or drop
+them by score.
 
 Run a full experiment batch and save generated cases plus summary reports:
 
