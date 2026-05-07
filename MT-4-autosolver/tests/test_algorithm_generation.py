@@ -77,6 +77,20 @@ class AlgorithmGenerationTest(unittest.TestCase):
         self.assertTrue(objective.feasible, objective.violations)
         self.assertGreater(objective.offer_count, 0)
 
+    def test_generated_solver_falls_back_when_threshold_scale_is_too_high(self) -> None:
+        instance = tiny_manual()
+        solver = GeneratedGreedySolver(
+            HeuristicSpec(
+                name="over_threshold",
+                edge_accept_weight=1.0,
+                edge_cost_weight=10.0,
+                min_edge_score=9999.0,
+            )
+        )
+        objective = Evaluator().evaluate(instance, solver.solve(instance, Evaluator()))
+        self.assertTrue(objective.feasible, objective.violations)
+        self.assertGreater(objective.offer_count, 0)
+
     def test_agent_includes_api_generated_specs_in_portfolio(self) -> None:
         instance = tiny_manual()
         agent = HeurAgenixLiteAgent(

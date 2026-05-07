@@ -77,12 +77,16 @@ class GeneratedGreedySolver:
                 order_candidates[order.id],
                 key=lambda edge: -self._edge_score(instance, edge, offers, rider_loads, order_candidates),
             )
-            for edge in ranked_edges:
+            eligible_edges = [
+                edge
+                for edge in ranked_edges
+                if self._edge_score(instance, edge, offers, rider_loads, order_candidates) >= self.spec.min_edge_score
+            ]
+            if not eligible_edges:
+                eligible_edges = ranked_edges
+            for edge in eligible_edges:
                 if expired(deadline) or len(offers.get(order.id, [])) >= target_offers:
                     break
-                score = self._edge_score(instance, edge, offers, rider_loads, order_candidates)
-                if score < self.spec.min_edge_score:
-                    continue
                 if can_add_to_state(instance, offers, rider_loads, edge.order_id, edge.rider_id):
                     add_to_state(offers, rider_loads, edge.order_id, edge.rider_id)
 

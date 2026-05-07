@@ -86,6 +86,11 @@ not execute generated source code; it converts validated specs into
 `GeneratedGreedySolver` instances and lets the portfolio evaluator keep or drop
 them by score.
 
+Some OpenAI-compatible providers can take longer than the local solver budget to
+generate specs. Use `--llm-timeout 90` for slower endpoints during offline
+strategy exploration; keep generated specs cached or switch back to `template`
+mode if the official 10-second path must include generation.
+
 Run a full experiment batch and save generated cases plus summary reports:
 
 ```powershell

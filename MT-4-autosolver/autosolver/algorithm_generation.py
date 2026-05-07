@@ -154,6 +154,11 @@ def build_generation_prompt(instance: Instance, count: int = 4) -> str:
 
         Constraints:
         - Do not output code.
+        - Edge scores are computed as:
+          edge_accept_weight * accept_prob - edge_cost_weight * cost + edge_value_weight * accept_prob / cost
+          + rider_load_penalty * remaining_capacity_ratio - order_candidate_penalty * candidate_count.
+        - Positive edge_cost_weight penalizes high cost; negative edge_cost_weight rewards high cost.
+        - Use min_edge_score sparingly because score units depend on cost scale; -10000 disables filtering.
         - Keep weights between -10 and 10.
         - Prefer diverse strategies, not near-duplicates.
         - The solver objective is lexicographic: maximize expected accepted orders, then minimize cost.
