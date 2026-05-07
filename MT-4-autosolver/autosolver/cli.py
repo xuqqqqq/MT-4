@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 
+from autosolver.agent import AgentMemory, HeurAgenixLiteAgent
 from autosolver.generators import CASE_GENERATORS, STRESS_CASE_GENERATORS, generate_case, random_case
 from autosolver.io import assignment_to_dict, read_instance, write_assignment, write_instance
 from autosolver.portfolio import PortfolioSolver
@@ -22,6 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dump-case", help="write the selected/generated instance JSON to this path")
     parser.add_argument("--output", help="write best assignment JSON to this path")
     parser.add_argument("--time-limit", type=float, default=9.0, help="portfolio time limit in seconds")
+    parser.add_argument("--agent", action="store_true", help="use the HeurAgenix-lite state-aware selector")
+    parser.add_argument("--agent-history", help="append agent decisions to this JSONL file")
     parser.add_argument("--random", action="store_true", help="use a generated random instance")
     parser.add_argument("--seed", type=int, default=0, help="random instance seed")
     parser.add_argument("--orders", type=int, default=30, help="random instance order count")
@@ -56,7 +59,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.dump_case:
         write_instance(instance, args.dump_case)
 
-    report = PortfolioSolver(time_limit_sec=args.time_limit).solve(instance)
+    agent_report = None
+    if args.agent:
+        agent_report = HeurAgenixLiteAgent(
+            time_limit_sec=args.time_limit,
+            memory=AgentMemory(args.agent_history),
+        ).solve(instance)
+        report = agent_report.portfolio
+    else:
+        report = PortfolioSolver(time_limit_sec=args.time_limit).solve(instance)
 
     if args.output:
         write_assignment(report.assignment, args.output)
@@ -91,10 +102,20 @@ def main(argv: list[str] | None = None) -> int:
             ],
             "assignment": assignment_to_dict(report.assignment),
         }
+        if agent_report is not None:
+            payload["agent"] = {
+                "selected_solvers": list(agent_report.decision.selected_solvers),
+                "scenario_tags": list(agent_report.decision.scenario_tags),
+                "rationale": list(agent_report.decision.rationale),
+                "features": agent_report.decision.features.to_dict(),
+            }
         json.dump(payload, sys.stdout, indent=2, ensure_ascii=False)
         print()
     else:
         print(f"instance: {instance.name}")
+        if agent_report is not None:
+            print(f"agent_tags: {', '.join(agent_report.decision.scenario_tags) or 'none'}")
+            print(f"agent_selected: {', '.join(agent_report.decision.selected_solvers)}")
         print(f"best_solver: {report.best_solver}")
         print(f"elapsed_sec: {report.elapsed_sec:.4f}")
         print(f"objective: {report.objective.label()}")

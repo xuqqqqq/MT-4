@@ -1,5 +1,6 @@
 import unittest
 
+from autosolver.agent import HeurAgenixLiteAgent
 from autosolver.evaluator import Evaluator
 from autosolver.generators import CASE_GENERATORS, complex_mixed_city, large_random, tiny_manual
 from autosolver.portfolio import PortfolioSolver
@@ -44,6 +45,20 @@ class SolverTest(unittest.TestCase):
         self.assertTrue(report.objective.feasible, report.objective.violations)
         self.assertEqual(len(instance.orders), 50)
         self.assertGreater(len(instance.edges), 0)
+
+    def test_agent_selects_multiposting_heuristics(self) -> None:
+        instance = large_random(seed=3, order_count=40, rider_count=10)
+        agent = HeurAgenixLiteAgent(time_limit_sec=1.0)
+        decision = agent.decide(instance)
+        self.assertIn("multiposting", decision.scenario_tags)
+        self.assertIn("marginal_probability", decision.selected_solvers)
+        self.assertIn("coverage_then_marginal", decision.selected_solvers)
+
+    def test_agent_solves_scaled_stress_case(self) -> None:
+        instance = complex_mixed_city(seed=12, order_count=60, rider_count=14)
+        report = HeurAgenixLiteAgent(time_limit_sec=1.0).solve(instance)
+        self.assertTrue(report.objective.feasible, report.objective.violations)
+        self.assertGreaterEqual(report.objective.expected_accepted, 0.0)
 
 
 if __name__ == "__main__":

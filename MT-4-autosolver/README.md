@@ -56,6 +56,13 @@ python -m autosolver --list-stress-cases
 python -m autosolver --stress-case complex_mixed_city --time-limit 9
 ```
 
+Run the HeurAgenix-lite agent selector:
+
+```powershell
+python -m autosolver --stress-case complex_mixed_city --agent --time-limit 9
+python scripts/run_experiments.py --stress-only --agent --time-limit 9
+```
+
 Run a full experiment batch and save generated cases plus summary reports:
 
 ```powershell

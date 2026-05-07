@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from autosolver.agent import AgentMemory, HeurAgenixLiteAgent
 from autosolver.generators import CASE_GENERATORS, STRESS_CASE_GENERATORS
 from autosolver.io import write_instance
 from autosolver.portfolio import PortfolioSolver
@@ -23,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-limit", type=float, default=9.0, help="portfolio budget per case")
     parser.add_argument("--include-stress", action="store_true", help="include large stress cases")
     parser.add_argument("--stress-only", action="store_true", help="run only large stress cases")
+    parser.add_argument("--agent", action="store_true", help="use the HeurAgenix-lite selector")
     return parser
 
 
@@ -43,7 +45,19 @@ def main(argv: list[str] | None = None) -> int:
         instance = generator()
         case_path = case_dir / f"{instance.name}.json"
         write_instance(instance, case_path)
-        report = PortfolioSolver(time_limit_sec=args.time_limit).solve(instance)
+        if args.agent:
+            agent = HeurAgenixLiteAgent(
+                time_limit_sec=args.time_limit,
+                memory=AgentMemory(output_dir / "agent_history.jsonl"),
+            )
+            agent_report = agent.solve(instance)
+            report = agent_report.portfolio
+            selected_solvers = ",".join(agent_report.decision.selected_solvers)
+            scenario_tags = ",".join(agent_report.decision.scenario_tags)
+        else:
+            report = PortfolioSolver(time_limit_sec=args.time_limit).solve(instance)
+            selected_solvers = ""
+            scenario_tags = ""
         row = {
             "case": name,
             "instance": instance.name,
@@ -56,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
             "total_cost": f"{report.objective.total_cost:.3f}",
             "offer_count": report.objective.offer_count,
             "elapsed_sec": f"{report.elapsed_sec:.6f}",
+            "selected_solvers": selected_solvers,
+            "scenario_tags": scenario_tags,
         }
         rows.append(row)
         print(
