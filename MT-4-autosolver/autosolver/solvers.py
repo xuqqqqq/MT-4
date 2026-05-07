@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import random
 import time
+from heapq import heappop, heappush
 from dataclasses import dataclass
+from itertools import product
 from typing import Protocol
 
 from autosolver.evaluator import Evaluator
@@ -39,12 +41,96 @@ def can_add(instance: Instance, assignment: Assignment, order_id: str, rider_id:
     return current_load < instance.rider(rider_id).max_orders
 
 
+def can_add_to_state(
+    instance: Instance,
+    offers: dict[str, list[str]],
+    rider_loads: dict[str, int],
+    order_id: str,
+    rider_id: str,
+) -> bool:
+    if rider_id in offers.get(order_id, []):
+        return False
+    edge = instance.edge(order_id, rider_id)
+    if edge is None or not edge.feasible:
+        return False
+    if len(offers.get(order_id, [])) >= instance.max_riders_per_order:
+        return False
+    return rider_loads.get(rider_id, 0) < instance.rider(rider_id).max_orders
+
+
+def add_to_state(offers: dict[str, list[str]], rider_loads: dict[str, int], order_id: str, rider_id: str) -> None:
+    offers.setdefault(order_id, []).append(rider_id)
+    rider_loads[rider_id] = rider_loads.get(rider_id, 0) + 1
+
+
+def assignment_from_state(offers: dict[str, list[str]]) -> Assignment:
+    return Assignment({order_id: tuple(riders) for order_id, riders in offers.items()})
+
+
+def state_from_assignment(instance: Instance, assignment: Assignment) -> tuple[dict[str, list[str]], dict[str, int], dict[str, float]]:
+    offers = {order_id: list(riders) for order_id, riders in assignment.offers.items()}
+    rider_loads = {rider.id: 0 for rider in instance.riders}
+    miss_probability = {order.id: 1.0 for order in instance.orders}
+    for order_id, riders in offers.items():
+        for rider_id in riders:
+            edge = instance.edge(order_id, rider_id)
+            if edge is None or not edge.feasible:
+                continue
+            rider_loads[rider_id] = rider_loads.get(rider_id, 0) + 1
+            miss_probability[order_id] *= 1.0 - edge.accept_prob
+    return offers, rider_loads, miss_probability
+
+
 def edge_preference(edge: Edge) -> tuple[float, float, str]:
     return (-edge.accept_prob, edge.cost, edge.rider_id)
 
 
 def edge_value(edge: Edge) -> float:
     return edge.accept_prob / max(edge.cost, 0.001)
+
+
+def expand_with_marginal_offers(
+    instance: Instance,
+    assignment: Assignment,
+    deadline: float | None,
+    min_gain: float = 0.005,
+) -> Assignment:
+    """Add offers by current marginal acceptance using a stale-safe heap."""
+
+    offers, rider_loads, miss_probability = state_from_assignment(instance, assignment)
+    priority = {order.id: order.priority for order in instance.orders}
+    version = {order.id: 0 for order in instance.orders}
+    heap: list[tuple[float, float, str, str, int]] = []
+
+    for edge in instance.edges:
+        if not edge.feasible:
+            continue
+        gain = priority[edge.order_id] * miss_probability[edge.order_id] * edge.accept_prob
+        if gain >= min_gain:
+            heappush(heap, (-gain, edge.cost, edge.order_id, edge.rider_id, version[edge.order_id]))
+
+    while heap and not expired(deadline):
+        negative_gain, cost, order_id, rider_id, item_version = heappop(heap)
+        if item_version != version[order_id]:
+            edge = instance.edge(order_id, rider_id)
+            if edge is None or not edge.feasible:
+                continue
+            gain = priority[order_id] * miss_probability[order_id] * edge.accept_prob
+            if gain >= min_gain:
+                heappush(heap, (-gain, edge.cost, order_id, rider_id, version[order_id]))
+            continue
+        if -negative_gain < min_gain:
+            break
+        if not can_add_to_state(instance, offers, rider_loads, order_id, rider_id):
+            continue
+        edge = instance.edge(order_id, rider_id)
+        if edge is None:
+            continue
+        offers.setdefault(order_id, []).append(rider_id)
+        rider_loads[rider_id] = rider_loads.get(rider_id, 0) + 1
+        miss_probability[order_id] *= 1.0 - edge.accept_prob
+        version[order_id] += 1
+    return assignment_from_state(offers)
 
 
 @dataclass(frozen=True)
@@ -60,7 +146,8 @@ class OrderGreedySolver:
     name: str = "order_greedy"
 
     def solve(self, instance: Instance, evaluator: Evaluator, deadline: float | None = None) -> Assignment:
-        assignment = Assignment.empty()
+        offers: dict[str, list[str]] = {}
+        rider_loads = {rider.id: 0 for rider in instance.riders}
         order_priority = sorted(
             instance.orders,
             key=lambda order: (
@@ -73,10 +160,10 @@ class OrderGreedySolver:
                 break
             candidates = sorted(instance.candidate_edges(order.id), key=edge_preference)
             for edge in candidates:
-                if can_add(instance, assignment, order.id, edge.rider_id):
-                    assignment = assignment.with_offer(order.id, edge.rider_id)
+                if can_add_to_state(instance, offers, rider_loads, order.id, edge.rider_id):
+                    add_to_state(offers, rider_loads, order.id, edge.rider_id)
                     break
-        return assignment
+        return assignment_from_state(offers)
 
 
 @dataclass(frozen=True)
@@ -84,7 +171,8 @@ class RiderGreedySolver:
     name: str = "rider_greedy"
 
     def solve(self, instance: Instance, evaluator: Evaluator, deadline: float | None = None) -> Assignment:
-        assignment = Assignment.empty()
+        offers: dict[str, list[str]] = {}
+        rider_loads = {rider.id: 0 for rider in instance.riders}
         for rider in sorted(instance.riders, key=lambda item: item.id):
             if expired(deadline):
                 break
@@ -95,11 +183,66 @@ class RiderGreedySolver:
             for edge in rider_edges:
                 if expired(deadline):
                     break
-                if can_add(instance, assignment, edge.order_id, rider.id):
-                    assignment = assignment.with_offer(edge.order_id, rider.id)
-                if assignment.rider_loads().get(rider.id, 0) >= rider.max_orders:
+                if can_add_to_state(instance, offers, rider_loads, edge.order_id, rider.id):
+                    add_to_state(offers, rider_loads, edge.order_id, rider.id)
+                if rider_loads.get(rider.id, 0) >= rider.max_orders:
                     break
-        return assignment
+        return assignment_from_state(offers)
+
+
+@dataclass(frozen=True)
+class GlobalProbabilityGreedySolver:
+    name: str = "global_probability_greedy"
+
+    def solve(self, instance: Instance, evaluator: Evaluator, deadline: float | None = None) -> Assignment:
+        offers: dict[str, list[str]] = {}
+        rider_loads = {rider.id: 0 for rider in instance.riders}
+        for edge in sorted(instance.edges, key=edge_preference):
+            if expired(deadline):
+                break
+            if can_add_to_state(instance, offers, rider_loads, edge.order_id, edge.rider_id):
+                add_to_state(offers, rider_loads, edge.order_id, edge.rider_id)
+        return assignment_from_state(offers)
+
+
+@dataclass(frozen=True)
+class GlobalValueGreedySolver:
+    name: str = "global_value_greedy"
+
+    def solve(self, instance: Instance, evaluator: Evaluator, deadline: float | None = None) -> Assignment:
+        offers: dict[str, list[str]] = {}
+        rider_loads = {rider.id: 0 for rider in instance.riders}
+        for edge in sorted(instance.edges, key=lambda edge: (-edge_value(edge), -edge.accept_prob, edge.cost)):
+            if expired(deadline):
+                break
+            if can_add_to_state(instance, offers, rider_loads, edge.order_id, edge.rider_id):
+                add_to_state(offers, rider_loads, edge.order_id, edge.rider_id)
+        return assignment_from_state(offers)
+
+
+@dataclass(frozen=True)
+class RegretGreedySolver:
+    name: str = "regret_greedy"
+
+    def solve(self, instance: Instance, evaluator: Evaluator, deadline: float | None = None) -> Assignment:
+        offers: dict[str, list[str]] = {}
+        rider_loads = {rider.id: 0 for rider in instance.riders}
+        ranked_orders = []
+        for order in instance.orders:
+            candidates = sorted(instance.candidate_edges(order.id), key=edge_preference)
+            best_probability = candidates[0].accept_prob if candidates else 0.0
+            second_probability = candidates[1].accept_prob if len(candidates) > 1 else 0.0
+            regret = best_probability - second_probability
+            ranked_orders.append((-order.priority * regret, len(candidates), -best_probability, order.id, candidates))
+
+        for _, _, _, order_id, candidates in sorted(ranked_orders):
+            if expired(deadline):
+                break
+            for edge in candidates:
+                if can_add_to_state(instance, offers, rider_loads, order_id, edge.rider_id):
+                    add_to_state(offers, rider_loads, order_id, edge.rider_id)
+                    break
+        return assignment_from_state(offers)
 
 
 @dataclass(frozen=True)
@@ -154,36 +297,22 @@ class MarginalProbabilitySolver:
     name: str = "marginal_probability"
 
     def solve(self, instance: Instance, evaluator: Evaluator, deadline: float | None = None) -> Assignment:
-        offers: dict[str, list[str]] = {}
-        rider_loads = {rider.id: 0 for rider in instance.riders}
-        miss_probability = {order.id: 1.0 for order in instance.orders}
-        priority = {order.id: order.priority for order in instance.orders}
-        ordered_edges = tuple(edge for edge in instance.edges if edge.feasible)
+        return expand_with_marginal_offers(instance, Assignment.empty(), deadline, self.min_gain)
 
-        while not expired(deadline):
-            best_edge: Edge | None = None
-            best_gain = self.min_gain
-            best_cost = float("inf")
-            for edge in ordered_edges:
-                if expired(deadline):
-                    break
-                if edge.rider_id in offers.get(edge.order_id, []):
-                    continue
-                if len(offers.get(edge.order_id, [])) >= instance.max_riders_per_order:
-                    continue
-                if rider_loads[edge.rider_id] >= instance.rider(edge.rider_id).max_orders:
-                    continue
-                gain = priority[edge.order_id] * miss_probability[edge.order_id] * edge.accept_prob
-                if gain > best_gain or (abs(gain - best_gain) <= 1e-12 and edge.cost < best_cost):
-                    best_edge = edge
-                    best_gain = gain
-                    best_cost = edge.cost
-            if best_edge is None:
-                break
-            offers.setdefault(best_edge.order_id, []).append(best_edge.rider_id)
-            rider_loads[best_edge.rider_id] += 1
-            miss_probability[best_edge.order_id] *= 1.0 - best_edge.accept_prob
-        return Assignment({order_id: tuple(riders) for order_id, riders in offers.items()})
+
+@dataclass(frozen=True)
+class CoverageThenMarginalSolver:
+    min_gain: float = 0.005
+    name: str = "coverage_then_marginal"
+
+    def solve(self, instance: Instance, evaluator: Evaluator, deadline: float | None = None) -> Assignment:
+        starts = [
+            OrderGreedySolver().solve(instance, evaluator, deadline),
+            RegretGreedySolver().solve(instance, evaluator, deadline),
+            GlobalProbabilityGreedySolver().solve(instance, evaluator, deadline),
+        ]
+        assignment, _ = evaluator.best(instance, starts)
+        return expand_with_marginal_offers(instance, assignment, deadline, self.min_gain)
 
 
 @dataclass(frozen=True)
@@ -221,6 +350,64 @@ class RandomSolver:
 
 
 @dataclass(frozen=True)
+class SwapSearchSolver:
+    candidate_limit: int = 1800
+    name: str = "swap_search"
+
+    def solve(self, instance: Instance, evaluator: Evaluator, deadline: float | None = None) -> Assignment:
+        starts = [
+            OrderGreedySolver().solve(instance, evaluator, deadline),
+            RegretGreedySolver().solve(instance, evaluator, deadline),
+            MarginalProbabilitySolver().solve(instance, evaluator, deadline),
+            CoverageThenMarginalSolver().solve(instance, evaluator, deadline),
+        ]
+        assignment, objective = evaluator.best(instance, starts)
+        checked = 0
+        for edge in sorted(instance.edges, key=edge_preference):
+            if expired(deadline) or checked >= self.candidate_limit:
+                break
+            if edge.rider_id in assignment.riders_for(edge.order_id):
+                continue
+            checked += 1
+            for trial in self._swap_trials(instance, assignment, edge):
+                if expired(deadline):
+                    break
+                trial_objective = evaluator.evaluate(instance, trial)
+                if evaluator.better(trial_objective, objective):
+                    assignment = trial
+                    objective = trial_objective
+                    break
+        return assignment
+
+    def _swap_trials(self, instance: Instance, assignment: Assignment, edge: Edge) -> list[Assignment]:
+        order_riders = assignment.riders_for(edge.order_id)
+        rider_orders = assignment.rider_orders().get(edge.rider_id, ())
+        rider_load = len(rider_orders)
+
+        order_removals: list[tuple[tuple[str, str], ...]] = [()]
+        if len(order_riders) >= instance.max_riders_per_order:
+            order_removals = [((edge.order_id, rider_id),) for rider_id in order_riders]
+
+        rider_removals: list[tuple[tuple[str, str], ...]] = [()]
+        if rider_load >= instance.rider(edge.rider_id).max_orders:
+            rider_removals = [((order_id, edge.rider_id),) for order_id in rider_orders]
+
+        trials: list[Assignment] = []
+        seen: set[tuple[tuple[str, str], ...]] = set()
+        for order_choice, rider_choice in product(order_removals, rider_removals):
+            removals = tuple(sorted(set(order_choice + rider_choice)))
+            if removals in seen:
+                continue
+            seen.add(removals)
+            trial = assignment
+            for order_id, rider_id in removals:
+                trial = trial.without_offer(order_id, rider_id)
+            if can_add(instance, trial, edge.order_id, edge.rider_id):
+                trials.append(trial.with_offer(edge.order_id, edge.rider_id))
+        return trials
+
+
+@dataclass(frozen=True)
 class LocalSearchSolver:
     seed: int = 29
     iterations: int = 600
@@ -230,8 +417,10 @@ class LocalSearchSolver:
         rng = random.Random(self.seed)
         starts = [
             OrderGreedySolver().solve(instance, evaluator, deadline),
+            RegretGreedySolver().solve(instance, evaluator, deadline),
             RiderGreedySolver().solve(instance, evaluator, deadline),
             MarginalProbabilitySolver().solve(instance, evaluator, deadline),
+            CoverageThenMarginalSolver().solve(instance, evaluator, deadline),
         ]
         assignment, objective = evaluator.best(instance, starts)
         all_pairs = [(edge.order_id, edge.rider_id) for edge in instance.edges if edge.feasible]
@@ -258,9 +447,14 @@ def default_solvers() -> list[Solver]:
     return [
         EmptySolver(),
         OrderGreedySolver(),
+        RegretGreedySolver(),
+        MarginalProbabilitySolver(),
+        CoverageThenMarginalSolver(),
         RiderGreedySolver(),
         BundleGreedySolver(),
-        MarginalProbabilitySolver(),
+        GlobalProbabilityGreedySolver(),
+        GlobalValueGreedySolver(),
+        SwapSearchSolver(),
         RandomSolver(),
         LocalSearchSolver(),
     ]

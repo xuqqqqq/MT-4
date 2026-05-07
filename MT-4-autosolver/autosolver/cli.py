@@ -6,8 +6,8 @@ import argparse
 import json
 import sys
 
-from autosolver.generators import CASE_GENERATORS, generate_case, random_case
-from autosolver.io import assignment_to_dict, instance_to_dict, read_instance, write_assignment, write_instance
+from autosolver.generators import CASE_GENERATORS, STRESS_CASE_GENERATORS, generate_case, random_case
+from autosolver.io import assignment_to_dict, read_instance, write_assignment, write_instance
 from autosolver.portfolio import PortfolioSolver
 
 
@@ -15,8 +15,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Prototype delivery AutoSolver")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--case", choices=sorted(CASE_GENERATORS), help="run a built-in synthetic case")
+    source.add_argument("--stress-case", choices=sorted(STRESS_CASE_GENERATORS), help="run a larger stress case")
     source.add_argument("--input", help="read an internal JSON instance")
     parser.add_argument("--list-cases", action="store_true", help="list available synthetic cases")
+    parser.add_argument("--list-stress-cases", action="store_true", help="list available larger stress cases")
     parser.add_argument("--dump-case", help="write the selected/generated instance JSON to this path")
     parser.add_argument("--output", help="write best assignment JSON to this path")
     parser.add_argument("--time-limit", type=float, default=9.0, help="portfolio time limit in seconds")
@@ -37,10 +39,17 @@ def main(argv: list[str] | None = None) -> int:
             print(name)
         return 0
 
+    if args.list_stress_cases:
+        for name in sorted(STRESS_CASE_GENERATORS):
+            print(name)
+        return 0
+
     if args.input:
         instance = read_instance(args.input)
     elif args.random:
         instance = random_case(seed=args.seed, order_count=args.orders, rider_count=args.riders)
+    elif args.stress_case:
+        instance = generate_case(args.stress_case)
     else:
         instance = generate_case(args.case or "tiny_manual")
 

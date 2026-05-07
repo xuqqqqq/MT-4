@@ -28,6 +28,8 @@ class PortfolioReport:
 
 
 class PortfolioSolver:
+    TIME_SLICED_SOLVERS = frozenset({"swap_search", "random", "local_search"})
+
     def __init__(
         self,
         solvers: list[Solver] | tuple[Solver, ...] | None = None,
@@ -52,12 +54,7 @@ class PortfolioSolver:
             if time.perf_counter() >= deadline:
                 break
             solver_start = time.perf_counter()
-            remaining_solvers = max(1, len(self.solvers) - index)
-            remaining_time = max(0.0, deadline - solver_start)
-            dynamic_slice = max(0.01, remaining_time / remaining_solvers)
-            if self.per_solver_limit_sec is not None:
-                dynamic_slice = min(dynamic_slice, self.per_solver_limit_sec)
-            solver_deadline = min(deadline, solver_start + dynamic_slice)
+            solver_deadline = self._solver_deadline(solver.name, solver_start, deadline, len(self.solvers) - index)
             try:
                 assignment = solver.solve(instance, self.evaluator, solver_deadline)
                 objective = self.evaluator.evaluate(instance, assignment)
@@ -78,3 +75,19 @@ class PortfolioSolver:
             elapsed_sec=time.perf_counter() - start,
             runs=tuple(runs),
         )
+
+    def _solver_deadline(
+        self,
+        solver_name: str,
+        solver_start: float,
+        global_deadline: float,
+        remaining_solvers: int,
+    ) -> float:
+        if solver_name not in self.TIME_SLICED_SOLVERS:
+            return global_deadline
+
+        remaining_time = max(0.0, global_deadline - solver_start)
+        dynamic_slice = max(0.01, remaining_time / max(1, remaining_solvers))
+        if self.per_solver_limit_sec is not None:
+            dynamic_slice = min(dynamic_slice, self.per_solver_limit_sec)
+        return min(global_deadline, solver_start + dynamic_slice)

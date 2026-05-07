@@ -205,9 +205,173 @@ CASE_GENERATORS: dict[str, Callable[[], Instance]] = {
 }
 
 
+def complex_mixed_city(seed: int = 1001, order_count: int = 650, rider_count: int = 120) -> Instance:
+    rng = random.Random(seed)
+    zones = [f"z{i}" for i in range(8)]
+    orders = tuple(
+        Order(f"o{i + 1}", priority=rng.choice([1.0, 1.0, 1.0, 1.2, 1.5]))
+        for i in range(order_count)
+    )
+    riders = tuple(Rider(f"r{i + 1}", max_orders=rng.randint(4, 10)) for i in range(rider_count))
+    rider_zones = {rider.id: rng.choice(zones) for rider in riders}
+    edges: list[Edge] = []
+    for index, order in enumerate(orders):
+        order_zone = zones[(index * 7 + seed) % len(zones)]
+        for rider in random_sample(rng, riders, rng.randint(7, min(18, rider_count))):
+            same_zone = rider_zones[rider.id] == order_zone
+            cost = rng.uniform(2.0, 24.0) * (0.55 if same_zone else 1.25)
+            probability = rng.uniform(0.12, 0.92) + (0.12 if same_zone else -0.05)
+            edges.append(
+                Edge(
+                    order.id,
+                    rider.id,
+                    round(max(0.7, cost), 3),
+                    round(min(0.97, max(0.03, probability)), 3),
+                )
+            )
+
+    discounts: list[BundleDiscount] = []
+    for rider in random_sample(rng, riders, min(60, len(riders))):
+        feasible_orders = [edge.order_id for edge in edges if edge.rider_id == rider.id]
+        if len(feasible_orders) < 3:
+            continue
+        for _ in range(rng.randint(1, 3)):
+            group = tuple(random_sample(rng, feasible_orders, min(rng.choice([2, 3, 4]), len(feasible_orders))))
+            discounts.append(BundleDiscount(rider.id, group, round(rng.uniform(2.0, 9.0), 3)))
+
+    return Instance(
+        name=f"complex_mixed_city_{order_count}x{rider_count}",
+        orders=orders,
+        riders=riders,
+        edges=tuple(edges),
+        max_riders_per_order=3,
+        bundle_discounts=tuple(discounts),
+        metadata={"seed": seed, "scenario": "mixed city, zone affinity, bundles, multiposting"},
+    )
+
+
+def complex_sparse_bottleneck(seed: int = 2002, order_count: int = 900, rider_count: int = 90) -> Instance:
+    rng = random.Random(seed)
+    orders = tuple(Order(f"o{i + 1}", priority=1.0 + (0.4 if i % 17 == 0 else 0.0)) for i in range(order_count))
+    riders = tuple(Rider(f"r{i + 1}", max_orders=rng.randint(6, 14)) for i in range(rider_count))
+    hot_riders = riders[: max(8, rider_count // 8)]
+    edges: list[Edge] = []
+    for index, order in enumerate(orders):
+        pool = hot_riders if index % 3 != 0 else riders
+        for rider in random_sample(rng, pool, min(len(pool), rng.randint(3, 8))):
+            hot = rider in hot_riders
+            probability = rng.uniform(0.45, 0.94) if hot else rng.uniform(0.16, 0.62)
+            cost = rng.uniform(1.2, 8.5) if hot else rng.uniform(6.0, 21.0)
+            edges.append(Edge(order.id, rider.id, round(cost, 3), round(probability, 3)))
+    return Instance(
+        name=f"complex_sparse_bottleneck_{order_count}x{rider_count}",
+        orders=orders,
+        riders=riders,
+        edges=tuple(edges),
+        max_riders_per_order=2,
+        metadata={"seed": seed, "scenario": "sparse graph with overloaded attractive riders"},
+    )
+
+
+def complex_bundle_trap(seed: int = 3003, order_count: int = 420, rider_count: int = 70) -> Instance:
+    rng = random.Random(seed)
+    orders = tuple(Order(f"o{i + 1}") for i in range(order_count))
+    riders = tuple(Rider(f"r{i + 1}", max_orders=rng.randint(4, 9)) for i in range(rider_count))
+    edges: list[Edge] = []
+    for order in orders:
+        for rider in random_sample(rng, riders, rng.randint(5, 12)):
+            expensive_bundle_rider = int(rider.id[1:]) % 5 == 0
+            cost = rng.uniform(8.0, 20.0) if expensive_bundle_rider else rng.uniform(2.0, 12.0)
+            probability = rng.uniform(0.55, 0.93) if expensive_bundle_rider else rng.uniform(0.35, 0.84)
+            edges.append(Edge(order.id, rider.id, round(cost, 3), round(probability, 3)))
+
+    discounts: list[BundleDiscount] = []
+    for rider in riders:
+        if int(rider.id[1:]) % 5 != 0:
+            continue
+        feasible_orders = [edge.order_id for edge in edges if edge.rider_id == rider.id]
+        rng.shuffle(feasible_orders)
+        for start in range(0, min(len(feasible_orders), 18), 3):
+            group = tuple(feasible_orders[start : start + 3])
+            if len(group) >= 2:
+                discounts.append(BundleDiscount(rider.id, group, round(rng.uniform(10.0, 28.0), 3)))
+    return Instance(
+        name=f"complex_bundle_trap_{order_count}x{rider_count}",
+        orders=orders,
+        riders=riders,
+        edges=tuple(edges),
+        max_riders_per_order=1,
+        bundle_discounts=tuple(discounts),
+        metadata={"seed": seed, "scenario": "single-edge greedy misses expensive-but-discounted bundles"},
+    )
+
+
+def complex_mega_mixed(seed: int = 4004, order_count: int = 1500, rider_count: int = 250) -> Instance:
+    rng = random.Random(seed)
+    zones = [f"z{i}" for i in range(12)]
+    orders = tuple(
+        Order(f"o{i + 1}", priority=rng.choice([1.0, 1.0, 1.0, 1.15, 1.35]))
+        for i in range(order_count)
+    )
+    riders = tuple(Rider(f"r{i + 1}", max_orders=rng.randint(5, 12)) for i in range(rider_count))
+    rider_zones = {rider.id: rng.choice(zones) for rider in riders}
+    edges: list[Edge] = []
+    for index, order in enumerate(orders):
+        order_zone = zones[(index * 5 + rng.randint(0, 3)) % len(zones)]
+        candidates = set(random_sample(rng, riders, rng.randint(8, 20)))
+        preferred = [rider for rider in riders if rider_zones[rider.id] == order_zone]
+        if preferred:
+            candidates.update(random_sample(rng, preferred, min(len(preferred), rng.randint(2, 5))))
+        for rider in sorted(candidates, key=lambda item: int(item.id[1:])):
+            same_zone = rider_zones[rider.id] == order_zone
+            crowd_penalty = 1.35 if int(rider.id[1:]) % 13 == 0 else 1.0
+            cost = rng.uniform(1.5, 26.0) * (0.58 if same_zone else 1.18) * crowd_penalty
+            probability = rng.uniform(0.10, 0.93) + (0.10 if same_zone else -0.04)
+            edges.append(
+                Edge(
+                    order.id,
+                    rider.id,
+                    round(max(cost, 0.6), 3),
+                    round(min(0.98, max(0.02, probability)), 3),
+                )
+            )
+
+    discounts: list[BundleDiscount] = []
+    for rider in random_sample(rng, riders, min(100, len(riders))):
+        feasible_orders = [edge.order_id for edge in edges if edge.rider_id == rider.id]
+        rng.shuffle(feasible_orders)
+        for start in range(0, min(len(feasible_orders), 20), 4):
+            group = tuple(feasible_orders[start : start + rng.choice([2, 3, 4])])
+            if len(group) >= 2:
+                discounts.append(BundleDiscount(rider.id, group, round(rng.uniform(2.0, 12.0), 3)))
+
+    return Instance(
+        name=f"complex_mega_mixed_{order_count}x{rider_count}",
+        orders=orders,
+        riders=riders,
+        edges=tuple(edges),
+        max_riders_per_order=3,
+        bundle_discounts=tuple(discounts),
+        metadata={"seed": seed, "scenario": "mega mixed stress case with zones, multiposting, bundles"},
+    )
+
+
+def random_sample(rng: random.Random, population: tuple | list, count: int) -> list:
+    return rng.sample(list(population), min(count, len(population)))
+
+
+STRESS_CASE_GENERATORS: dict[str, Callable[[], Instance]] = {
+    "complex_mixed_city": complex_mixed_city,
+    "complex_sparse_bottleneck": complex_sparse_bottleneck,
+    "complex_bundle_trap": complex_bundle_trap,
+    "complex_mega_mixed": complex_mega_mixed,
+}
+
+
 def generate_case(name: str) -> Instance:
+    generators = {**CASE_GENERATORS, **STRESS_CASE_GENERATORS}
     try:
-        return CASE_GENERATORS[name]()
+        return generators[name]()
     except KeyError as exc:
-        available = ", ".join(sorted(CASE_GENERATORS))
+        available = ", ".join(sorted(generators))
         raise ValueError(f"unknown case {name!r}; available cases: {available}") from exc

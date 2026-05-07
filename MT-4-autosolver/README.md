@@ -49,6 +49,19 @@ Run a larger generated case with a 9 second portfolio budget:
 python -m autosolver --case large_random --time-limit 9
 ```
 
+Run a stress case:
+
+```powershell
+python -m autosolver --list-stress-cases
+python -m autosolver --stress-case complex_mixed_city --time-limit 9
+```
+
+Run a full experiment batch and save generated cases plus summary reports:
+
+```powershell
+python scripts/run_experiments.py --include-stress --time-limit 9
+```
+
 Dump a synthetic case and solve from JSON:
 
 ```powershell
