@@ -1,8 +1,8 @@
 # Delivery AutoSolver Prototype
 
-This repository contains a first-pass, dependency-free Python framework for the
-delivery assignment challenge. The official data schema is not available yet, so
-the code is organized around replaceable adapters:
+This repository contains a dependency-free Python framework for the delivery
+assignment challenge. It keeps the early synthetic framework while adding a
+dedicated adapter for the official TSV candidate format:
 
 - `autosolver.model`: stable internal `Instance`, `Assignment`, `Edge`, and
   bundle discount types.
@@ -17,6 +17,8 @@ the code is organized around replaceable adapters:
   feasible result.
 - `autosolver.io`: internal JSON adapter to be replaced or wrapped when the
   official input/output format arrives.
+- `autosolver.official`: official TSV adapter, evaluator, solver portfolio, and
+  contest `solve(input_text)` implementation.
 
 ## Current scoring assumption
 
@@ -104,15 +106,27 @@ python -m autosolver --case bundle_wins --dump-case bundle_wins.json
 python -m autosolver --input bundle_wins.json --json
 ```
 
+Run an official TSV case:
+
+```powershell
+python -m autosolver --official-input large_seed301.txt --time-limit 9
+python -m autosolver --official-input large_seed301.txt --time-limit 9 --output official_result.json
+```
+
+The contest-style entrypoint is [official_solver.py](official_solver.py), which
+defines `solve(input_text: str) -> list`.
+
 Run tests:
 
 ```powershell
 python -m unittest discover -s tests
 ```
 
-## Next official-data step
+## Official-data notes
 
-When the contest examples arrive, add a parser/writer for the official schema and
-map it to `Instance`/`Assignment`. The solvers and portfolio runner should not
-need structural rewrites unless the official constraints add new state that is
-not represented yet.
+The official TSV rows are treated as candidate hyper-edges:
+`task_id_list + courier_id -> total_score, willingness`. A `task_id_list` can
+contain one task or a bundled pair. The current official evaluator maximizes
+expected accepted task count using `willingness`, then deterministic task
+coverage, then total score. If the released judge uses a different priority,
+only `OfficialEvaluator.better` should need to change.

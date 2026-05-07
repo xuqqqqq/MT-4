@@ -13,6 +13,16 @@ from autosolver.features import InstanceFeatures, SolutionFeatures, extract_inst
 from autosolver.generated_solver import GeneratedGreedySolver, HeuristicSpec
 from autosolver.generators import CASE_GENERATORS, STRESS_CASE_GENERATORS, generate_case
 from autosolver.model import Assignment, BundleDiscount, Edge, Instance, Order, Rider
+from autosolver.official import (
+    OfficialAssignment,
+    OfficialCandidate,
+    OfficialEvaluator,
+    OfficialInstance,
+    OfficialOffer,
+    OfficialPortfolioSolver,
+    OfficialReport,
+    parse_official_input,
+)
 from autosolver.portfolio import PortfolioReport, PortfolioSolver
 
 __all__ = [
@@ -31,6 +41,13 @@ __all__ = [
     "Instance",
     "InstanceFeatures",
     "Objective",
+    "OfficialAssignment",
+    "OfficialCandidate",
+    "OfficialEvaluator",
+    "OfficialInstance",
+    "OfficialOffer",
+    "OfficialPortfolioSolver",
+    "OfficialReport",
     "OpenAICompatibleAlgorithmGenerator",
     "Order",
     "PortfolioReport",
@@ -43,5 +60,6 @@ __all__ = [
     "extract_solution_features",
     "generate_case",
     "make_algorithm_generator",
+    "parse_official_input",
     "parse_specs",
 ]

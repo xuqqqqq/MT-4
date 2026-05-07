@@ -10,6 +10,7 @@ from autosolver.agent import AgentMemory, HeurAgenixLiteAgent
 from autosolver.algorithm_generation import make_algorithm_generator
 from autosolver.generators import CASE_GENERATORS, STRESS_CASE_GENERATORS, generate_case, random_case
 from autosolver.io import assignment_to_dict, read_instance, write_assignment, write_instance
+from autosolver.official import OfficialPortfolioSolver, parse_official_input
 from autosolver.portfolio import PortfolioSolver
 
 
@@ -19,6 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     source.add_argument("--case", choices=sorted(CASE_GENERATORS), help="run a built-in synthetic case")
     source.add_argument("--stress-case", choices=sorted(STRESS_CASE_GENERATORS), help="run a larger stress case")
     source.add_argument("--input", help="read an internal JSON instance")
+    source.add_argument("--official-input", help="read an official TSV candidate file")
     parser.add_argument("--list-cases", action="store_true", help="list available synthetic cases")
     parser.add_argument("--list-stress-cases", action="store_true", help="list available larger stress cases")
     parser.add_argument("--dump-case", help="write the selected/generated instance JSON to this path")
@@ -64,6 +66,62 @@ def main(argv: list[str] | None = None) -> int:
     if args.list_stress_cases:
         for name in sorted(STRESS_CASE_GENERATORS):
             print(name)
+        return 0
+
+    if args.official_input:
+        with open(args.official_input, encoding="utf-8-sig") as handle:
+            official_text = handle.read()
+        instance = parse_official_input(official_text)
+        report = OfficialPortfolioSolver(time_limit_sec=args.time_limit).solve(instance)
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as handle:
+                json.dump(report.assignment.to_result(), handle, indent=2, ensure_ascii=False)
+                handle.write("\n")
+        if args.json:
+            payload = {
+                "best_solver": report.best_solver,
+                "elapsed_sec": report.elapsed_sec,
+                "objective": {
+                    "expected_accepted": report.objective.expected_accepted,
+                    "covered_task_count": report.objective.covered_task_count,
+                    "total_score": report.objective.total_score,
+                    "offer_count": report.objective.offer_count,
+                    "feasible": report.objective.feasible,
+                    "violations": list(report.objective.violations),
+                },
+                "runs": [
+                    {
+                        "solver": run.solver_name,
+                        "elapsed_sec": run.elapsed_sec,
+                        "objective": None
+                        if run.objective is None
+                        else {
+                            "expected_accepted": run.objective.expected_accepted,
+                            "covered_task_count": run.objective.covered_task_count,
+                            "total_score": run.objective.total_score,
+                            "offer_count": run.objective.offer_count,
+                            "feasible": run.objective.feasible,
+                        },
+                        "error": run.error,
+                    }
+                    for run in report.runs
+                ],
+                "assignment": report.assignment.to_result(),
+            }
+            json.dump(payload, sys.stdout, indent=2, ensure_ascii=False)
+            print()
+        else:
+            print(f"official_tasks: {len(instance.task_ids)}")
+            print(f"official_couriers: {len(instance.courier_ids)}")
+            print(f"official_candidates: {len(instance.candidates)}")
+            print(f"best_solver: {report.best_solver}")
+            print(f"elapsed_sec: {report.elapsed_sec:.4f}")
+            print(f"objective: {report.objective.label()}")
+            for run in report.runs:
+                if run.error:
+                    print(f"- {run.solver_name}: ERROR after {run.elapsed_sec:.4f}s: {run.error}")
+                elif run.objective:
+                    print(f"- {run.solver_name}: {run.objective.label()} in {run.elapsed_sec:.4f}s")
         return 0
 
     if args.input:
