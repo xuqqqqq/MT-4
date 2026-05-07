@@ -1,0 +1,63 @@
+{
+  "name": "tiny_manual",
+  "max_riders_per_order": 1,
+  "orders": [
+    {
+      "id": "o1",
+      "demand": 1,
+      "priority": 1.0
+    },
+    {
+      "id": "o2",
+      "demand": 1,
+      "priority": 1.0
+    }
+  ],
+  "riders": [
+    {
+      "id": "r1",
+      "max_orders": 1
+    },
+    {
+      "id": "r2",
+      "max_orders": 1
+    }
+  ],
+  "edges": [
+    {
+      "order_id": "o1",
+      "rider_id": "r1",
+      "cost": 1.0,
+      "accept_prob": 0.9,
+      "feasible": true
+    },
+    {
+      "order_id": "o1",
+      "rider_id": "r2",
+      "cost": 8.0,
+      "accept_prob": 0.4,
+      "feasible": true
+    },
+    {
+      "order_id": "o2",
+      "rider_id": "r1",
+      "cost": 7.0,
+      "accept_prob": 0.3,
+      "feasible": true
+    },
+    {
+      "order_id": "o2",
+      "rider_id": "r2",
+      "cost": 1.0,
+      "accept_prob": 0.9,
+      "feasible": true
+    }
+  ],
+  "bundle_discounts": [],
+  "metadata": {
+    "expected_best": {
+      "expected_accepted": 1.8,
+      "total_cost": 2.0
+    }
+  }
+}

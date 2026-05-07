@@ -1,0 +1,87 @@
+{
+  "name": "bundle_wins",
+  "max_riders_per_order": 1,
+  "orders": [
+    {
+      "id": "o1",
+      "demand": 1,
+      "priority": 1.0
+    },
+    {
+      "id": "o2",
+      "demand": 1,
+      "priority": 1.0
+    },
+    {
+      "id": "o3",
+      "demand": 1,
+      "priority": 1.0
+    }
+  ],
+  "riders": [
+    {
+      "id": "solo",
+      "max_orders": 3
+    },
+    {
+      "id": "bundle",
+      "max_orders": 3
+    }
+  ],
+  "edges": [
+    {
+      "order_id": "o1",
+      "rider_id": "solo",
+      "cost": 2.0,
+      "accept_prob": 0.9,
+      "feasible": true
+    },
+    {
+      "order_id": "o2",
+      "rider_id": "solo",
+      "cost": 2.0,
+      "accept_prob": 0.9,
+      "feasible": true
+    },
+    {
+      "order_id": "o3",
+      "rider_id": "solo",
+      "cost": 2.0,
+      "accept_prob": 0.9,
+      "feasible": true
+    },
+    {
+      "order_id": "o1",
+      "rider_id": "bundle",
+      "cost": 3.2,
+      "accept_prob": 0.9,
+      "feasible": true
+    },
+    {
+      "order_id": "o2",
+      "rider_id": "bundle",
+      "cost": 3.2,
+      "accept_prob": 0.9,
+      "feasible": true
+    },
+    {
+      "order_id": "o3",
+      "rider_id": "bundle",
+      "cost": 3.2,
+      "accept_prob": 0.9,
+      "feasible": true
+    }
+  ],
+  "bundle_discounts": [
+    {
+      "rider_id": "bundle",
+      "order_ids": [
+        "o1",
+        "o2",
+        "o3"
+      ],
+      "discount": 5.0
+    }
+  ],
+  "metadata": {}
+}
