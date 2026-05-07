@@ -1,63 +1,63 @@
-"""Single-file submission for Meituan AutoSolver challenge.
+"""Single-file submission for the AutoSolver challenge.
 
-The judge is expected to import this file and call:
+This file is written for old Python 3 runtimes, including Python 3.5/3.6:
+no dataclasses, no f-strings, no external packages, and no network calls.
+
+The judge should call:
 
     solve(input_text: str) -> list
-
-The returned list shape is:
-
-    [(task_id_list_str, [courier_id, ...]), ...]
-
-This file is intentionally dependency-free and does not call any external API.
 """
 
-from __future__ import annotations
-
 import time
-from dataclasses import dataclass
-from typing import Iterable
 
 
-@dataclass(frozen=True)
-class Candidate:
-    task_key: str
-    tasks: tuple[str, ...]
-    courier_id: str
-    score: float
-    willingness: float
+class Candidate(object):
+    __slots__ = ("task_key", "tasks", "courier_id", "score", "willingness")
+
+    def __init__(self, task_key, tasks, courier_id, score, willingness):
+        self.task_key = task_key
+        self.tasks = tasks
+        self.courier_id = courier_id
+        self.score = score
+        self.willingness = willingness
 
     @property
-    def task_set(self) -> tuple[str, ...]:
+    def task_set(self):
         return tuple(sorted(self.tasks))
 
 
-@dataclass(frozen=True)
-class Instance:
-    candidates: tuple[Candidate, ...]
-    task_ids: tuple[str, ...]
-    by_offer: dict[tuple[str, str], Candidate]
-    by_task_set: dict[tuple[str, ...], tuple[Candidate, ...]]
+class Instance(object):
+    __slots__ = ("candidates", "task_ids", "by_offer", "by_task_set")
+
+    def __init__(self, candidates, task_ids, by_offer, by_task_set):
+        self.candidates = candidates
+        self.task_ids = task_ids
+        self.by_offer = by_offer
+        self.by_task_set = by_task_set
 
 
-def solve(input_text: str) -> list:
-    """Contest entrypoint."""
+def solve(input_text):
+    """Contest entrypoint: return [(task_id_list_str, [courier_id, ...]), ...]."""
 
     instance = parse_input(input_text)
-    selected = portfolio_solve(instance, time_limit_sec=9.0)
+    selected = portfolio_solve(instance, 9.0)
     return assignment_to_result(selected)
 
 
-def parse_input(input_text: str) -> Instance:
-    candidates: list[Candidate] = []
+def parse_input(input_text):
+    candidates = []
     lines = input_text.splitlines()
-    start = 1 if lines and lines[0].lstrip("\ufeff").startswith("task_id_list") else 0
+    start = 0
+    if lines and lines[0].lstrip("\ufeff").startswith("task_id_list"):
+        start = 1
+
     for line in lines[start:]:
         if not line.strip():
             continue
         parts = line.rstrip("\n").split("\t")
         if len(parts) < 4:
             continue
-        task_key = ",".join(part.strip() for part in parts[0].strip().split(",") if part.strip())
+        task_key = ",".join([part.strip() for part in parts[0].strip().split(",") if part.strip()])
         if not task_key:
             continue
         try:
@@ -65,62 +65,44 @@ def parse_input(input_text: str) -> Instance:
             willingness = float(parts[3])
         except ValueError:
             continue
-        candidates.append(
-            Candidate(
-                task_key=task_key,
-                tasks=tuple(task_key.split(",")),
-                courier_id=parts[1].strip(),
-                score=score,
-                willingness=willingness,
-            )
-        )
+        candidates.append(Candidate(task_key, tuple(task_key.split(",")), parts[1].strip(), score, willingness))
 
-    by_offer: dict[tuple[str, str], Candidate] = {}
-    grouped: dict[tuple[str, ...], list[Candidate]] = {}
-    task_ids = sorted({task_id for candidate in candidates for task_id in candidate.tasks})
+    by_offer = {}
+    grouped = {}
+    task_set_all = set()
     for candidate in candidates:
         by_offer[(candidate.task_key, candidate.courier_id)] = candidate
         grouped.setdefault(candidate.task_set, []).append(candidate)
-    return Instance(
-        candidates=tuple(candidates),
-        task_ids=tuple(task_ids),
-        by_offer=by_offer,
-        by_task_set={key: tuple(value) for key, value in grouped.items()},
-    )
+        for task_id in candidate.tasks:
+            task_set_all.add(task_id)
+
+    by_task_set = {}
+    for key, value in grouped.items():
+        by_task_set[key] = tuple(value)
+
+    return Instance(tuple(candidates), tuple(sorted(task_set_all)), by_offer, by_task_set)
 
 
-def portfolio_solve(instance: Instance, time_limit_sec: float) -> dict[tuple[str, ...], tuple[str, list[str]]]:
-    start = time.perf_counter()
-    deadline = start + time_limit_sec
-    best: dict[tuple[str, ...], tuple[str, list[str]]] = {}
+def portfolio_solve(instance, time_limit_sec):
+    deadline = time.perf_counter() + time_limit_sec
+    best = {}
     best_obj = evaluate(instance, best)
 
     strategies = (
-        ("score", lambda c: (c.score, c.task_key, c.courier_id), 1, 0.0),
-        ("score_per_task", lambda c: (c.score / len(c.tasks), c.score, c.task_key, c.courier_id), 1, 0.0),
-        ("willingness", lambda c: (-c.willingness, c.score, c.task_key, c.courier_id), 1, 0.0),
-        ("score_minus_10w", lambda c: (c.score - 10.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 1, 0.0),
-        ("score_minus_25w", lambda c: (c.score - 25.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 1, 0.0),
-        (
-            "score_per_expected",
-            lambda c: (c.score / max(len(c.tasks) * c.willingness, 1e-9), c.score, c.task_key),
-            1,
-            0.0,
-        ),
-        ("pair_first_score", lambda c: (-len(c.tasks), c.score, c.task_key, c.courier_id), 1, 0.0),
-        ("score_multi2", lambda c: (c.score, c.task_key, c.courier_id), 2, 0.01),
-        (
-            "expected_multi3",
-            lambda c: (c.score / max(len(c.tasks) * c.willingness, 1e-9), c.score, c.task_key),
-            3,
-            0.01,
-        ),
-        ("willing_multi3", lambda c: (-c.willingness, c.score, c.task_key, c.courier_id), 3, 0.01),
-        # A cost-aware multi-offer compromise in case the hidden scorer weighs score more strongly.
-        ("balanced_multi2", lambda c: (c.score - 25.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 2, 0.01),
+        (lambda c: (c.score, c.task_key, c.courier_id), 1, 0.0),
+        (lambda c: (c.score / len(c.tasks), c.score, c.task_key, c.courier_id), 1, 0.0),
+        (lambda c: (-c.willingness, c.score, c.task_key, c.courier_id), 1, 0.0),
+        (lambda c: (c.score - 10.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 1, 0.0),
+        (lambda c: (c.score - 25.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 1, 0.0),
+        (lambda c: (c.score / max(len(c.tasks) * c.willingness, 1e-9), c.score, c.task_key), 1, 0.0),
+        (lambda c: (-len(c.tasks), c.score, c.task_key, c.courier_id), 1, 0.0),
+        (lambda c: (c.score, c.task_key, c.courier_id), 2, 0.01),
+        (lambda c: (c.score / max(len(c.tasks) * c.willingness, 1e-9), c.score, c.task_key), 3, 0.01),
+        (lambda c: (-c.willingness, c.score, c.task_key, c.courier_id), 3, 0.01),
+        (lambda c: (c.score - 25.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 2, 0.01),
     )
 
-    for _, key_func, max_offers, min_gain in strategies:
+    for key_func, max_offers, min_gain in strategies:
         if expired(deadline):
             break
         selected = choose_disjoint(instance, sorted(instance.candidates, key=key_func), deadline)
@@ -133,14 +115,10 @@ def portfolio_solve(instance: Instance, time_limit_sec: float) -> dict[tuple[str
     return best
 
 
-def choose_disjoint(
-    instance: Instance,
-    ordered_candidates: Iterable[Candidate],
-    deadline: float,
-) -> dict[tuple[str, ...], tuple[str, list[str]]]:
-    selected: dict[tuple[str, ...], tuple[str, list[str]]] = {}
-    covered_tasks: set[str] = set()
-    used_couriers: set[str] = set()
+def choose_disjoint(instance, ordered_candidates, deadline):
+    selected = {}
+    covered_tasks = set()
+    used_couriers = set()
     for candidate in ordered_candidates:
         if expired(deadline):
             break
@@ -157,17 +135,18 @@ def choose_disjoint(
     return selected
 
 
-def expand_multi_offers(
-    instance: Instance,
-    selected: dict[tuple[str, ...], tuple[str, list[str]]],
-    max_offers_per_bundle: int,
-    min_marginal_gain: float,
-    deadline: float,
-) -> dict[tuple[str, ...], tuple[str, list[str]]]:
-    expanded = {task_set: (task_key, list(couriers)) for task_set, (task_key, couriers) in selected.items()}
-    used_couriers = {courier_id for _, couriers in expanded.values() for courier_id in couriers}
-    miss_probability: dict[tuple[str, ...], float] = {}
-    for task_set, (task_key, couriers) in expanded.items():
+def expand_multi_offers(instance, selected, max_offers_per_bundle, min_marginal_gain, deadline):
+    expanded = {}
+    for task_set, value in selected.items():
+        expanded[task_set] = (value[0], list(value[1]))
+
+    used_couriers = set()
+    for _, couriers in expanded.values():
+        used_couriers.update(couriers)
+
+    miss_probability = {}
+    for task_set, value in expanded.items():
+        task_key, couriers = value
         probabilities = []
         for courier_id in couriers:
             candidate = instance.by_offer.get((task_key, courier_id))
@@ -175,8 +154,9 @@ def expand_multi_offers(
                 probabilities.append(candidate.willingness)
         miss_probability[task_set] = 1.0 - acceptance_probability(probabilities)
 
-    ranked: list[tuple[float, float, Candidate]] = []
-    for task_set, (task_key, couriers) in expanded.items():
+    ranked = []
+    for task_set, value in expanded.items():
+        _, couriers = value
         for candidate in instance.by_task_set.get(task_set, ()):
             if candidate.courier_id in couriers:
                 continue
@@ -202,15 +182,16 @@ def expand_multi_offers(
     return expanded
 
 
-def evaluate(instance: Instance, selected: dict[tuple[str, ...], tuple[str, list[str]]]) -> tuple:
-    used_couriers: set[str] = set()
-    covered_tasks: set[str] = set()
+def evaluate(instance, selected):
+    used_couriers = set()
+    covered_tasks = set()
     expected = 0.0
     total_score = 0.0
     offer_count = 0
     feasible = True
 
-    for task_set, (task_key, couriers) in selected.items():
+    for task_set, value in selected.items():
+        task_key, couriers = value
         if any(task_id in covered_tasks for task_id in task_set):
             feasible = False
         probabilities = []
@@ -228,21 +209,20 @@ def evaluate(instance: Instance, selected: dict[tuple[str, ...], tuple[str, list
     return (feasible, expected, len(covered_tasks), -total_score, -offer_count)
 
 
-def better(candidate_obj: tuple, incumbent_obj: tuple) -> bool:
-    # Feasibility first, then expected accepted task count, then deterministic coverage,
-    # then lower total score and fewer offers via negative tie-breakers.
+def better(candidate_obj, incumbent_obj):
     return candidate_obj > incumbent_obj
 
 
-def assignment_to_result(selected: dict[tuple[str, ...], tuple[str, list[str]]]) -> list:
+def assignment_to_result(selected):
     result = []
-    for _, (task_key, couriers) in sorted(selected.items(), key=lambda item: item[1][0]):
+    for _, value in sorted(selected.items(), key=lambda item: item[1][0]):
+        task_key, couriers = value
         if couriers:
             result.append((task_key, list(couriers)))
     return result
 
 
-def acceptance_probability(probabilities: Iterable[float]) -> float:
+def acceptance_probability(probabilities):
     miss = 1.0
     for probability in probabilities:
         if probability < 0.0:
@@ -253,5 +233,5 @@ def acceptance_probability(probabilities: Iterable[float]) -> float:
     return 1.0 - miss
 
 
-def expired(deadline: float) -> bool:
+def expired(deadline):
     return time.perf_counter() >= deadline
