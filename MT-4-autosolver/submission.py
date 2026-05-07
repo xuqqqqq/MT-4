@@ -88,19 +88,46 @@ def portfolio_solve(instance, time_limit_sec):
     best = {}
     best_obj = evaluate(instance, best)
 
-    strategies = (
-        (lambda c: (c.score, c.task_key, c.courier_id), 1, 0.0),
-        (lambda c: (c.score / len(c.tasks), c.score, c.task_key, c.courier_id), 1, 0.0),
-        (lambda c: (-c.willingness, c.score, c.task_key, c.courier_id), 1, 0.0),
-        (lambda c: (c.score - 10.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 1, 0.0),
-        (lambda c: (c.score - 25.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 1, 0.0),
-        (lambda c: (c.score / max(len(c.tasks) * c.willingness, 1e-9), c.score, c.task_key), 1, 0.0),
-        (lambda c: (-len(c.tasks), c.score, c.task_key, c.courier_id), 1, 0.0),
-        (lambda c: (c.score, c.task_key, c.courier_id), 2, 0.01),
-        (lambda c: (c.score / max(len(c.tasks) * c.willingness, 1e-9), c.score, c.task_key), 3, 0.01),
-        (lambda c: (-c.willingness, c.score, c.task_key, c.courier_id), 3, 0.01),
-        (lambda c: (c.score - 25.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 2, 0.01),
+    strategies = []
+    add_strategy(strategies, lambda c: (c.score, c.task_key, c.courier_id), 1, 0.0)
+    add_strategy(strategies, lambda c: (c.score / len(c.tasks), c.score, c.task_key, c.courier_id), 1, 0.0)
+    add_strategy(strategies, lambda c: (-len(c.tasks), c.score / len(c.tasks), c.score, c.task_key), 1, 0.0)
+    add_strategy(strategies, lambda c: (-c.willingness, c.score, c.task_key, c.courier_id), 1, 0.0)
+    add_strategy(strategies, lambda c: (c.score / max(len(c.tasks) * c.willingness, 1e-9), c.score, c.task_key), 1, 0.0)
+
+    for weight in (5.0, 10.0, 15.0, 20.0, 25.0, 35.0, 50.0, 75.0):
+        add_strategy(
+            strategies,
+            lambda c, w=weight: (c.score - w * len(c.tasks) * c.willingness, c.score, c.task_key),
+            1,
+            0.0,
+        )
+        add_strategy(
+            strategies,
+            lambda c, w=weight: ((c.score - w * len(c.tasks) * c.willingness) / len(c.tasks), c.score, c.task_key),
+            1,
+            0.0,
+        )
+
+    base_multi_keys = (
+        lambda c: (c.score, c.task_key, c.courier_id),
+        lambda c: (c.score / max(len(c.tasks) * c.willingness, 1e-9), c.score, c.task_key),
+        lambda c: (-c.willingness, c.score, c.task_key, c.courier_id),
+        lambda c: (c.score / len(c.tasks), c.score, c.task_key, c.courier_id),
     )
+    for key_func in base_multi_keys:
+        for max_offers in (2, 3):
+            for min_gain in (0.005, 0.01, 0.02, 0.05):
+                add_strategy(strategies, key_func, max_offers, min_gain)
+
+    for weight in (15.0, 25.0, 35.0, 50.0):
+        for max_offers in (2, 3):
+            add_strategy(
+                strategies,
+                lambda c, w=weight: (c.score - w * len(c.tasks) * c.willingness, c.score, c.task_key),
+                max_offers,
+                0.01,
+            )
 
     for key_func, max_offers, min_gain in strategies:
         if expired(deadline):
@@ -113,6 +140,10 @@ def portfolio_solve(instance, time_limit_sec):
             best = selected
             best_obj = obj
     return best
+
+
+def add_strategy(strategies, key_func, max_offers, min_gain):
+    strategies.append((key_func, max_offers, min_gain))
 
 
 def choose_disjoint(instance, ordered_candidates, deadline):
@@ -187,6 +218,7 @@ def evaluate(instance, selected):
     covered_tasks = set()
     expected = 0.0
     total_score = 0.0
+    expected_penalty = 0.0
     offer_count = 0
     feasible = True
 
@@ -195,18 +227,23 @@ def evaluate(instance, selected):
         if any(task_id in covered_tasks for task_id in task_set):
             feasible = False
         probabilities = []
+        remain = 1.0
+        group_expected_score = 0.0
         for courier_id in couriers:
             candidate = instance.by_offer.get((task_key, courier_id))
             if candidate is None or candidate.task_set != task_set or courier_id in used_couriers:
                 feasible = False
                 continue
             probabilities.append(candidate.willingness)
+            group_expected_score += remain * candidate.willingness * candidate.score
+            remain *= 1.0 - candidate.willingness
             total_score += candidate.score
             offer_count += 1
             used_couriers.add(courier_id)
         covered_tasks.update(task_set)
         expected += len(task_set) * acceptance_probability(probabilities)
-    return (feasible, expected, len(covered_tasks), -total_score, -offer_count)
+        expected_penalty += group_expected_score + remain * 100.0 * len(task_set)
+    return (feasible, len(covered_tasks), -expected_penalty, expected, -total_score, -offer_count)
 
 
 def better(candidate_obj, incumbent_obj):
