@@ -54,7 +54,9 @@ class GroupOption(object):
 def solve(input_text: str) -> list:
     """Contest entrypoint: return [(task_id_list_str, [courier_id, ...]), ...]."""
 
+    global REJECT_PENALTY
     instance = parse_input(input_text)
+    REJECT_PENALTY = 85.0 if is_scarce_instance(instance) else 100.0
     selected = portfolio_solve(instance, 7.0)
     return assignment_to_result(selected)
 
@@ -108,6 +110,13 @@ def portfolio_solve(instance, time_limit_sec):
     deadline = time.perf_counter() + time_limit_sec
     best = {}
     best_obj = evaluate(instance, best)
+
+    if is_scarce_instance(instance) or has_strong_bundle_discount(instance):
+        selected = pair_only_starts(instance, deadline)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
 
     strategies = []
     add_strategy(strategies, lambda c: (c.score, c.task_key, c.courier_id), 1, 0.0, None)
@@ -255,6 +264,30 @@ def expand_multi_offers(instance, selected, max_offers_per_bundle, min_marginal_
         used_couriers.add(candidate.courier_id)
         miss_probability[task_set] *= 1.0 - candidate.willingness
     return expanded
+
+
+def pair_only_starts(instance, deadline):
+    pair_candidates = [candidate for candidate in instance.candidates if len(candidate.tasks) > 1]
+    if not pair_candidates:
+        return {}
+    best = {}
+    best_obj = evaluate(instance, best)
+    strategies = (
+        (lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness, c.task_key), 3, 0.005),
+        (lambda c: (c.score / len(c.tasks), c.score, -c.willingness, c.task_key), 3, 0.005),
+        (lambda c: (c.score - 35.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 3, 0.01),
+        (lambda c: (-c.willingness, c.score, c.task_key, c.courier_id), 3, 0.01),
+    )
+    for key_func, max_offers, min_gain in strategies:
+        if expired(deadline):
+            break
+        selected = choose_disjoint(instance, sorted(pair_candidates, key=key_func), deadline, None)
+        selected = expand_multi_offers(instance, selected, max_offers, min_gain, deadline)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
+    return best
 
 
 def option_search_solve(instance, deadline):
@@ -544,6 +577,43 @@ def courier_order_key(instance, task_key, courier_id):
     if candidate is None:
         return (float("inf"), 0.0, courier_id)
     return (candidate.score, -candidate.willingness, courier_id)
+
+
+def is_scarce_instance(instance):
+    task_count = len(instance.task_ids)
+    if task_count == 0:
+        return False
+    return courier_count(instance) <= task_count * 1.15
+
+
+def courier_count(instance):
+    couriers = set()
+    for candidate in instance.candidates:
+        couriers.add(candidate.courier_id)
+    return len(couriers)
+
+
+def has_strong_bundle_discount(instance):
+    single_scores = []
+    bundle_scores = []
+    for candidate in instance.candidates:
+        if len(candidate.tasks) == 1:
+            single_scores.append(candidate.score)
+        elif len(candidate.tasks) > 1:
+            bundle_scores.append(candidate.score / len(candidate.tasks))
+    if not single_scores or not bundle_scores:
+        return False
+    return median_value(bundle_scores) <= 0.68 * median_value(single_scores)
+
+
+def median_value(values):
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
 
 
 def evaluate(instance, selected):
