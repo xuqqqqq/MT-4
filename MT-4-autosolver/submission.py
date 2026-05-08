@@ -65,7 +65,7 @@ def configured_reject_penalty(instance):
     if is_scarce_instance(instance):
         return 90.0
     if is_complete_pair_dense_instance(instance):
-        return 120.0
+        return 220.0
     return 100.0
 
 
@@ -849,7 +849,7 @@ def is_compact_bundle_instance(instance):
 
 def time_budget_for_instance(instance):
     if is_complete_pair_dense_instance(instance):
-        return 8.0
+        return 7.3
     return 7.9
 
 
