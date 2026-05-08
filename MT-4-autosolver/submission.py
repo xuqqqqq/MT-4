@@ -801,7 +801,7 @@ def is_scarce_instance(instance):
 
 def time_budget_for_instance(instance):
     if is_complete_pair_dense_instance(instance):
-        return 6.8
+        return 7.2
     return 7.9
 
 
