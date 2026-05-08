@@ -56,7 +56,7 @@ def solve(input_text: str) -> list:
 
     global REJECT_PENALTY
     instance = parse_input(input_text)
-    REJECT_PENALTY = 90.0 if is_scarce_instance(instance) else 100.0
+    REJECT_PENALTY = initial_reject_penalty(instance)
     selected = portfolio_solve(instance, time_budget_for_instance(instance))
     return assignment_to_result(selected)
 
@@ -587,6 +587,16 @@ def is_scarce_instance(instance):
     return courier_count(instance) <= task_count * 1.15
 
 
+def initial_reject_penalty(instance):
+    if is_scarce_instance(instance):
+        return 90.0
+    if is_low_willingness_instance(instance):
+        return 160.0
+    if is_high_noise_instance(instance):
+        return 180.0
+    return 100.0
+
+
 def time_budget_for_instance(instance):
     if is_complete_pair_dense_instance(instance):
         return 7.0
@@ -625,6 +635,30 @@ def has_strong_bundle_discount(instance):
     if not single_scores or not bundle_scores:
         return False
     return median_value(bundle_scores) <= 0.68 * median_value(single_scores)
+
+
+def is_low_willingness_instance(instance):
+    if len(instance.task_ids) == 0:
+        return False
+    if courier_count(instance) < len(instance.task_ids) * 1.8:
+        return False
+    values = []
+    for candidate in instance.candidates:
+        values.append(candidate.willingness)
+    return median_value(values) < 0.18
+
+
+def is_high_noise_instance(instance):
+    if len(instance.task_ids) == 0:
+        return False
+    scores = []
+    for candidate in instance.candidates:
+        scores.append(candidate.score)
+    if len(scores) < 100:
+        return False
+    scores.sort()
+    p99 = scores[int(len(scores) * 0.99)]
+    return p99 >= 170.0
 
 
 def median_value(values):
