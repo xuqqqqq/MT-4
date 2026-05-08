@@ -197,18 +197,6 @@ def portfolio_solve(instance, time_limit_sec):
         if better(obj, best_obj):
             best = selected
             best_obj = obj
-    if is_low_willingness_instance(instance) and not expired(deadline):
-        selected = reject_penalty_probe(instance, best, deadline, (120.0, 140.0, 160.0))
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
-    if is_compact_bundle_instance(instance) and not expired(deadline):
-        selected = reject_penalty_probe(instance, best, deadline, (110.0, 120.0, 140.0, 160.0))
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
     if is_scarce_instance(instance) and not expired(deadline):
         selected = scarce_coverage_repair(instance, best, deadline)
         obj = evaluate(instance, selected)
