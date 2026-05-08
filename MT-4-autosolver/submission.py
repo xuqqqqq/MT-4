@@ -56,14 +56,17 @@ def solve(input_text: str) -> list:
 
     global REJECT_PENALTY
     instance = parse_input(input_text)
-    if is_scarce_instance(instance):
-        REJECT_PENALTY = 90.0
-    elif is_complete_pair_dense_instance(instance):
-        REJECT_PENALTY = 120.0
-    else:
-        REJECT_PENALTY = 100.0
+    REJECT_PENALTY = configured_reject_penalty(instance)
     selected = portfolio_solve(instance, time_budget_for_instance(instance))
     return assignment_to_result(selected)
+
+
+def configured_reject_penalty(instance):
+    if is_scarce_instance(instance):
+        return 90.0
+    if is_complete_pair_dense_instance(instance):
+        return 120.0
+    return 100.0
 
 
 def parse_input(input_text):
