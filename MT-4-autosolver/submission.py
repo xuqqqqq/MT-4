@@ -9,6 +9,7 @@ The judge should call:
 """
 
 import itertools
+import math
 import time
 
 REJECT_PENALTY = 100.0
@@ -53,10 +54,8 @@ class GroupOption(object):
 def solve(input_text: str) -> list:
     """Contest entrypoint: return [(task_id_list_str, [courier_id, ...]), ...]."""
 
-    global REJECT_PENALTY
     instance = parse_input(input_text)
-    REJECT_PENALTY = estimate_reject_penalty(instance)
-    selected = portfolio_solve(instance, estimate_time_budget(instance))
+    selected = portfolio_solve(instance, 7.0)
     return assignment_to_result(selected)
 
 
@@ -81,6 +80,12 @@ def parse_input(input_text):
             willingness = float(parts[3])
         except ValueError:
             continue
+        if not math.isfinite(score) or not math.isfinite(willingness):
+            continue
+        if willingness < 0.0:
+            willingness = 0.0
+        elif willingness > 1.0:
+            willingness = 1.0
         candidates.append(Candidate(task_key, tuple(task_key.split(",")), parts[1].strip(), score, willingness))
 
     by_offer = {}
@@ -103,7 +108,6 @@ def portfolio_solve(instance, time_limit_sec):
     deadline = time.perf_counter() + time_limit_sec
     best = {}
     best_obj = evaluate(instance, best)
-    stats = instance_stats(instance)
 
     strategies = []
     add_strategy(strategies, lambda c: (c.score, c.task_key, c.courier_id), 1, 0.0, None)
@@ -154,17 +158,6 @@ def portfolio_solve(instance, time_limit_sec):
         add_strategy(strategies, lambda c: (candidate_penalty(c) / len(c.tasks), c.score, c.task_key), 2, 0.01, margin)
         add_strategy(strategies, lambda c: (candidate_penalty(c) / len(c.tasks), c.score, c.task_key), 3, 0.01, margin)
         add_strategy(strategies, lambda c: (c.score - 25.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 2, 0.01, margin)
-
-    if stats["median_willingness"] < 0.18 and stats["courier_count"] >= stats["task_count"] * 2:
-        low_willing_keys = (
-            lambda c: (candidate_penalty(c) / len(c.tasks), c.score, c.task_key),
-            lambda c: (c.score / max(c.willingness, 1e-9), c.score, c.task_key),
-            lambda c: (-c.willingness, c.score, c.task_key, c.courier_id),
-        )
-        for key_func in low_willing_keys:
-            for max_offers in (4,):
-                for min_gain in (0.5, 1.5, 3.0):
-                    add_strategy(strategies, key_func, max_offers, min_gain, None)
 
     for key_func, max_offers, min_gain, margin in strategies:
         if expired(deadline):
@@ -551,57 +544,6 @@ def courier_order_key(instance, task_key, courier_id):
     if candidate is None:
         return (float("inf"), 0.0, courier_id)
     return (candidate.score, -candidate.willingness, courier_id)
-
-
-def estimate_time_budget(instance):
-    task_count = len(instance.task_ids)
-    if task_count <= 8:
-        return 2.0
-    if task_count <= 18:
-        return 4.0
-    return 8.4
-
-
-def estimate_reject_penalty(instance):
-    stats = instance_stats(instance)
-    task_count = stats["task_count"]
-    courier_count = stats["courier_count"]
-    median_willingness = stats["median_willingness"]
-    if task_count == 0:
-        return 100.0
-    if courier_count <= task_count * 1.15:
-        return 85.0
-    if median_willingness < 0.18:
-        return 110.0
-    if task_count >= 35:
-        return 120.0
-    if task_count >= 25:
-        return 115.0
-    return 110.0
-
-
-def instance_stats(instance):
-    task_count = len(instance.task_ids)
-    couriers = set()
-    willingness_values = []
-    for candidate in instance.candidates:
-        couriers.add(candidate.courier_id)
-        willingness_values.append(candidate.willingness)
-    return {
-        "task_count": task_count,
-        "courier_count": len(couriers),
-        "median_willingness": median_value(willingness_values),
-    }
-
-
-def median_value(values):
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    middle = len(ordered) // 2
-    if len(ordered) % 2:
-        return ordered[middle]
-    return (ordered[middle - 1] + ordered[middle]) / 2.0
 
 
 def evaluate(instance, selected):
