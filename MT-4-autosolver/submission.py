@@ -117,6 +117,12 @@ def portfolio_solve(instance, time_limit_sec):
         if better(obj, best_obj):
             best = selected
             best_obj = obj
+    if is_low_willingness_instance(instance):
+        selected = low_willing_pair_starts(instance, deadline)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
 
     strategies = []
     add_strategy(strategies, lambda c: (c.score, c.task_key, c.courier_id), 1, 0.0, None)
@@ -287,6 +293,31 @@ def pair_only_starts(instance, deadline):
         if better(obj, best_obj):
             best = selected
             best_obj = obj
+    return best
+
+
+def low_willing_pair_starts(instance, deadline):
+    pair_candidates = [candidate for candidate in instance.candidates if len(candidate.tasks) > 1]
+    if not pair_candidates:
+        return {}
+    best = {}
+    best_obj = evaluate(instance, best)
+    strategies = (
+        lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness, c.task_key),
+        lambda c: (c.score / max(c.willingness, 1e-9), c.score, c.task_key),
+        lambda c: (-c.willingness, c.score, c.task_key, c.courier_id),
+        lambda c: (c.score / len(c.tasks), c.score, -c.willingness, c.task_key),
+    )
+    for max_offers in (5, 6):
+        for key_func in strategies:
+            if expired(deadline):
+                break
+            selected = choose_disjoint(instance, sorted(pair_candidates, key=key_func), deadline, None)
+            selected = expand_multi_offers(instance, selected, max_offers, 0.0, deadline)
+            obj = evaluate(instance, selected)
+            if better(obj, best_obj):
+                best = selected
+                best_obj = obj
     return best
 
 
@@ -604,6 +635,18 @@ def has_strong_bundle_discount(instance):
     if not single_scores or not bundle_scores:
         return False
     return median_value(bundle_scores) <= 0.68 * median_value(single_scores)
+
+
+def is_low_willingness_instance(instance):
+    task_count = len(instance.task_ids)
+    if task_count == 0:
+        return False
+    if courier_count(instance) < task_count * 1.8:
+        return False
+    values = []
+    for candidate in instance.candidates:
+        values.append(candidate.willingness)
+    return median_value(values) < 0.18
 
 
 def median_value(values):
