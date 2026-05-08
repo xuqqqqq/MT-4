@@ -56,7 +56,7 @@ def solve(input_text: str) -> list:
 
     global REJECT_PENALTY
     instance = parse_input(input_text)
-    REJECT_PENALTY = initial_reject_penalty(instance)
+    REJECT_PENALTY = 90.0 if is_scarce_instance(instance) else 100.0
     selected = portfolio_solve(instance, time_budget_for_instance(instance))
     return assignment_to_result(selected)
 
@@ -185,6 +185,12 @@ def portfolio_solve(instance, time_limit_sec):
             best_obj = obj
     if not expired(deadline):
         selected = option_search_solve(instance, deadline)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
+    if is_scarce_instance(instance) and not expired(deadline):
+        selected = scarce_coverage_repair(instance, best, deadline)
         obj = evaluate(instance, selected)
         if better(obj, best_obj):
             best = selected
@@ -481,6 +487,76 @@ def repair_search(instance, seed_selected, deadline):
     return best
 
 
+def scarce_coverage_repair(instance, seed_selected, deadline):
+    best = normalize_selected(instance, seed_selected)
+    best_obj = evaluate(instance, best)
+    fill_order = sorted(
+        instance.candidates,
+        key=lambda c: (
+            -len(c.tasks),
+            candidate_penalty(c) / len(c.tasks),
+            c.score,
+            -c.willingness,
+            c.task_key,
+            c.courier_id,
+        ),
+    )
+    for _ in range(2):
+        if expired(deadline):
+            break
+        uncovered = uncovered_tasks(instance, best)
+        if not uncovered:
+            break
+        improved = False
+        checked = 0
+        for candidate in scarce_uncovered_candidates(instance, uncovered):
+            if expired(deadline) or checked >= 700:
+                break
+            checked += 1
+            selected = replace_with_candidate(instance, best, candidate, fill_order, deadline)
+            selected = expand_multi_offers(instance, selected, 3, 0.005, deadline)
+            selected = normalize_selected(instance, selected)
+            obj = evaluate(instance, selected)
+            if better(obj, best_obj):
+                best = selected
+                best_obj = obj
+                improved = True
+        if not improved:
+            break
+    return best
+
+
+def uncovered_tasks(instance, selected):
+    covered = set()
+    for task_set in selected:
+        covered.update(task_set)
+    result = []
+    for task_id in instance.task_ids:
+        if task_id not in covered:
+            result.append(task_id)
+    return set(result)
+
+
+def scarce_uncovered_candidates(instance, uncovered):
+    ranked = []
+    for candidate in instance.candidates:
+        overlap = 0
+        for task_id in candidate.tasks:
+            if task_id in uncovered:
+                overlap += 1
+        if overlap == 0:
+            continue
+        ranked.append((
+            -overlap,
+            candidate_penalty(candidate) / len(candidate.tasks),
+            candidate.score / max(candidate.willingness, 1e-9),
+            candidate.score,
+            -candidate.willingness,
+            candidate,
+        ))
+    return [item[-1] for item in sorted(ranked)]
+
+
 def limited_repair_candidates(instance):
     selected = []
     seen = set()
@@ -587,16 +663,6 @@ def is_scarce_instance(instance):
     return courier_count(instance) <= task_count * 1.15
 
 
-def initial_reject_penalty(instance):
-    if is_scarce_instance(instance):
-        return 90.0
-    if is_low_willingness_instance(instance):
-        return 160.0
-    if is_high_noise_instance(instance):
-        return 180.0
-    return 100.0
-
-
 def time_budget_for_instance(instance):
     if is_complete_pair_dense_instance(instance):
         return 7.0
@@ -635,30 +701,6 @@ def has_strong_bundle_discount(instance):
     if not single_scores or not bundle_scores:
         return False
     return median_value(bundle_scores) <= 0.68 * median_value(single_scores)
-
-
-def is_low_willingness_instance(instance):
-    if len(instance.task_ids) == 0:
-        return False
-    if courier_count(instance) < len(instance.task_ids) * 1.8:
-        return False
-    values = []
-    for candidate in instance.candidates:
-        values.append(candidate.willingness)
-    return median_value(values) < 0.18
-
-
-def is_high_noise_instance(instance):
-    if len(instance.task_ids) == 0:
-        return False
-    scores = []
-    for candidate in instance.candidates:
-        scores.append(candidate.score)
-    if len(scores) < 100:
-        return False
-    scores.sort()
-    p99 = scores[int(len(scores) * 0.99)]
-    return p99 >= 170.0
 
 
 def median_value(values):
