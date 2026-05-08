@@ -56,7 +56,7 @@ def solve(input_text: str) -> list:
 
     global REJECT_PENALTY
     instance = parse_input(input_text)
-    REJECT_PENALTY = initial_reject_penalty(instance)
+    REJECT_PENALTY = 90.0 if is_scarce_instance(instance) else 100.0
     selected = portfolio_solve(instance, 7.0)
     return assignment_to_result(selected)
 
@@ -585,28 +585,6 @@ def is_scarce_instance(instance):
     if task_count == 0:
         return False
     return courier_count(instance) <= task_count * 1.15
-
-
-def initial_reject_penalty(instance):
-    if is_scarce_instance(instance):
-        return 90.0
-    if is_large_dense_instance(instance):
-        return 220.0
-    return 100.0
-
-
-def is_large_dense_instance(instance):
-    task_count = len(instance.task_ids)
-    if task_count < 38:
-        return False
-    if courier_count(instance) < task_count * 1.8:
-        return False
-    pair_count = 0
-    for task_set in instance.by_task_set:
-        if len(task_set) == 2:
-            pair_count += 1
-    expected_pairs = task_count * (task_count - 1) // 2
-    return pair_count >= expected_pairs * 0.95
 
 
 def courier_count(instance):
