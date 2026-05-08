@@ -195,6 +195,12 @@ def portfolio_solve(instance, time_limit_sec):
         if better(obj, best_obj):
             best = selected
             best_obj = obj
+    if is_scarce_instance(instance) and not expired(deadline):
+        selected = scarce_courier_reassignment(instance, best, deadline)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
     return normalize_selected(instance, best)
 
 
@@ -526,6 +532,125 @@ def scarce_coverage_repair(instance, seed_selected, deadline):
     return best
 
 
+def scarce_courier_reassignment(instance, seed_selected, deadline):
+    selected = normalize_selected(instance, seed_selected)
+    if not selected:
+        return selected
+    best_obj = evaluate(instance, selected)
+    max_group_size = 3
+    passes = 0
+    while passes < 6 and not expired(deadline):
+        passes += 1
+        improved = False
+        groups = list(selected.keys())
+        current_penalties = {}
+        for task_set in groups:
+            task_key, couriers = selected[task_set]
+            current_penalties[task_set] = reassignment_group_penalty(instance, task_set, task_key, couriers)
+
+        # Move one courier from an over-supported group to a group where that courier
+        # is a better marginal fit. Keeping source non-empty avoids risky coverage loss.
+        best_move = None
+        for source in groups:
+            if expired(deadline):
+                break
+            source_key, source_couriers = selected[source]
+            if len(source_couriers) <= 1:
+                continue
+            for courier_id in list(source_couriers):
+                for target in groups:
+                    if source == target:
+                        continue
+                    target_key, target_couriers = selected[target]
+                    if len(target_couriers) >= max_group_size:
+                        continue
+                    if instance.by_offer.get((target_key, courier_id)) is None:
+                        continue
+                    new_source = [c for c in source_couriers if c != courier_id]
+                    new_target = list(target_couriers) + [courier_id]
+                    before = current_penalties[source] + current_penalties[target]
+                    after = (
+                        reassignment_group_penalty(instance, source, source_key, new_source)
+                        + reassignment_group_penalty(instance, target, target_key, new_target)
+                    )
+                    gain = before - after
+                    if gain > 1e-9 and (best_move is None or gain > best_move[0]):
+                        best_move = (gain, source, target, courier_id)
+
+        if best_move is not None:
+            _, source, target, courier_id = best_move
+            source_key, source_couriers = selected[source]
+            target_key, target_couriers = selected[target]
+            selected[source] = (source_key, [c for c in source_couriers if c != courier_id])
+            selected[target] = (target_key, list(target_couriers) + [courier_id])
+            selected = normalize_selected(instance, selected)
+            obj = evaluate(instance, selected)
+            if better(obj, best_obj):
+                best_obj = obj
+                improved = True
+            else:
+                return normalize_selected(instance, seed_selected)
+            continue
+
+        best_swap = None
+        groups = list(selected.keys())
+        current_penalties = {}
+        for task_set in groups:
+            task_key, couriers = selected[task_set]
+            current_penalties[task_set] = reassignment_group_penalty(instance, task_set, task_key, couriers)
+        for left_index in range(len(groups)):
+            if expired(deadline):
+                break
+            left = groups[left_index]
+            left_key, left_couriers = selected[left]
+            for right in groups[left_index + 1:]:
+                right_key, right_couriers = selected[right]
+                for left_courier in left_couriers:
+                    if instance.by_offer.get((right_key, left_courier)) is None:
+                        continue
+                    for right_courier in right_couriers:
+                        if instance.by_offer.get((left_key, right_courier)) is None:
+                            continue
+                        new_left = [right_courier if c == left_courier else c for c in left_couriers]
+                        new_right = [left_courier if c == right_courier else c for c in right_couriers]
+                        before = current_penalties[left] + current_penalties[right]
+                        after = (
+                            reassignment_group_penalty(instance, left, left_key, new_left)
+                            + reassignment_group_penalty(instance, right, right_key, new_right)
+                        )
+                        gain = before - after
+                        if gain > 1e-9 and (best_swap is None or gain > best_swap[0]):
+                            best_swap = (gain, left, right, left_courier, right_courier)
+
+        if best_swap is not None:
+            _, left, right, left_courier, right_courier = best_swap
+            left_key, left_couriers = selected[left]
+            right_key, right_couriers = selected[right]
+            selected[left] = (left_key, [right_courier if c == left_courier else c for c in left_couriers])
+            selected[right] = (right_key, [left_courier if c == right_courier else c for c in right_couriers])
+            selected = normalize_selected(instance, selected)
+            obj = evaluate(instance, selected)
+            if better(obj, best_obj):
+                best_obj = obj
+                improved = True
+            else:
+                return normalize_selected(instance, seed_selected)
+
+        if not improved:
+            break
+    return normalize_selected(instance, selected)
+
+
+def reassignment_group_penalty(instance, task_set, task_key, couriers):
+    ordered = []
+    for courier_id in sorted(couriers, key=lambda cid: courier_order_key(instance, task_key, cid)):
+        candidate = instance.by_offer.get((task_key, courier_id))
+        if candidate is None or candidate.task_set != task_set:
+            return float("inf")
+        ordered.append(candidate)
+    return group_expected_penalty(task_set, ordered)
+
+
 def uncovered_tasks(instance, selected):
     covered = set()
     for task_set in selected:
@@ -665,7 +790,7 @@ def is_scarce_instance(instance):
 
 def time_budget_for_instance(instance):
     if is_complete_pair_dense_instance(instance):
-        return 7.1
+        return 7.05
     return 7.9
 
 
