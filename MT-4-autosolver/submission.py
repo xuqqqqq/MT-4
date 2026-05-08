@@ -55,12 +55,9 @@ def solve(input_text: str) -> list:
     """Contest entrypoint: return [(task_id_list_str, [courier_id, ...]), ...]."""
 
     global REJECT_PENALTY
-    start_time = time.perf_counter()
     instance = parse_input(input_text)
     REJECT_PENALTY = 90.0 if is_scarce_instance(instance) else 100.0
     selected = portfolio_solve(instance, 7.0)
-    if is_complete_pair_dense_instance(instance):
-        selected = large_dense_single_repair(instance, selected, start_time + 7.75)
     return assignment_to_result(selected)
 
 
@@ -484,39 +481,6 @@ def repair_search(instance, seed_selected, deadline):
     return best
 
 
-def large_dense_single_repair(instance, incumbent, deadline):
-    if expired(deadline):
-        return incumbent
-    singles = [candidate for candidate in instance.candidates if len(candidate.tasks) == 1]
-    if not singles:
-        return incumbent
-    selected = choose_disjoint(
-        instance,
-        sorted(singles, key=lambda c: (candidate_penalty(c), c.score, -c.willingness, c.task_key)),
-        deadline,
-        None,
-    )
-    selected = expand_multi_offers(instance, selected, 2, 0.005, deadline)
-    selected = repair_search(instance, selected, deadline)
-    if large_dense_choice_key(instance, selected) < large_dense_choice_key(instance, incumbent):
-        return selected
-    return incumbent
-
-
-def large_dense_choice_key(instance, selected):
-    global REJECT_PENALTY
-    saved_penalty = REJECT_PENALTY
-    REJECT_PENALTY = 150.0
-    obj = evaluate(instance, selected)
-    REJECT_PENALTY = saved_penalty
-    pair_count = 0
-    for task_set in selected:
-        if len(task_set) > 1:
-            pair_count += 1
-    total_score = -obj[4]
-    return (-obj[1] + 20.0 * pair_count + 0.02 * total_score, -obj[3], total_score)
-
-
 def limited_repair_candidates(instance):
     selected = []
     seen = set()
@@ -621,20 +585,6 @@ def is_scarce_instance(instance):
     if task_count == 0:
         return False
     return courier_count(instance) <= task_count * 1.15
-
-
-def is_complete_pair_dense_instance(instance):
-    task_count = len(instance.task_ids)
-    if task_count < 38:
-        return False
-    if courier_count(instance) < task_count * 1.8:
-        return False
-    pair_count = 0
-    for task_set in instance.by_task_set:
-        if len(task_set) == 2:
-            pair_count += 1
-    expected_pairs = task_count * (task_count - 1) // 2
-    return pair_count >= expected_pairs * 0.95
 
 
 def courier_count(instance):
