@@ -195,7 +195,13 @@ def portfolio_solve(instance, time_limit_sec):
             best = selected
             best_obj = obj
     if is_low_willingness_instance(instance) and not expired(deadline):
-        selected = low_willingness_probe(instance, best, deadline)
+        selected = reject_penalty_probe(instance, best, deadline, (120.0, 140.0, 160.0))
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
+    if is_compact_bundle_instance(instance) and not expired(deadline):
+        selected = reject_penalty_probe(instance, best, deadline, (110.0, 120.0, 140.0, 160.0))
         obj = evaluate(instance, selected)
         if better(obj, best_obj):
             best = selected
@@ -510,13 +516,13 @@ def repair_search(instance, seed_selected, deadline):
     return best
 
 
-def low_willingness_probe(instance, seed_selected, deadline):
+def reject_penalty_probe(instance, seed_selected, deadline, probe_penalties):
     global REJECT_PENALTY
     base_penalty = REJECT_PENALTY
     best = normalize_selected(instance, seed_selected)
     best_obj = evaluate(instance, best)
     try:
-        for probe_penalty in (120.0, 140.0, 160.0):
+        for probe_penalty in probe_penalties:
             if expired(deadline):
                 break
             REJECT_PENALTY = probe_penalty
@@ -842,9 +848,17 @@ def is_low_willingness_instance(instance):
     return median_value(values) < 0.18
 
 
+def is_compact_bundle_instance(instance):
+    if len(instance.task_ids) > 35:
+        return False
+    if is_low_willingness_instance(instance) or is_scarce_instance(instance) or is_complete_pair_dense_instance(instance):
+        return False
+    return has_strong_bundle_discount(instance)
+
+
 def time_budget_for_instance(instance):
     if is_complete_pair_dense_instance(instance):
-        return 7.6
+        return 8.0
     return 7.9
 
 
