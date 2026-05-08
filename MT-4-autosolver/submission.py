@@ -194,6 +194,12 @@ def portfolio_solve(instance, time_limit_sec):
         if better(obj, best_obj):
             best = selected
             best_obj = obj
+    if is_low_willingness_instance(instance) and not expired(deadline):
+        selected = low_willingness_probe(instance, best, deadline)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
     if is_scarce_instance(instance) and not expired(deadline):
         selected = scarce_coverage_repair(instance, best, deadline)
         obj = evaluate(instance, selected)
@@ -504,6 +510,32 @@ def repair_search(instance, seed_selected, deadline):
     return best
 
 
+def low_willingness_probe(instance, seed_selected, deadline):
+    global REJECT_PENALTY
+    base_penalty = REJECT_PENALTY
+    best = normalize_selected(instance, seed_selected)
+    best_obj = evaluate(instance, best)
+    try:
+        for probe_penalty in (120.0, 140.0, 160.0):
+            if expired(deadline):
+                break
+            REJECT_PENALTY = probe_penalty
+            candidate = option_search_solve(instance, deadline)
+            if not candidate:
+                candidate = best
+            if not expired(deadline):
+                candidate = repair_search(instance, candidate, deadline)
+            candidate = normalize_selected(instance, candidate)
+            REJECT_PENALTY = base_penalty
+            obj = evaluate(instance, candidate)
+            if better(obj, best_obj):
+                best = candidate
+                best_obj = obj
+    finally:
+        REJECT_PENALTY = base_penalty
+    return best
+
+
 def scarce_coverage_repair(instance, seed_selected, deadline):
     best = normalize_selected(instance, seed_selected)
     best_obj = evaluate(instance, best)
@@ -799,9 +831,20 @@ def is_scarce_instance(instance):
     return courier_count(instance) <= task_count * 1.15
 
 
+def is_low_willingness_instance(instance):
+    if not instance.task_ids:
+        return False
+    if is_scarce_instance(instance) or is_complete_pair_dense_instance(instance):
+        return False
+    if courier_count(instance) < len(instance.task_ids) * 1.8:
+        return False
+    values = [candidate.willingness for candidate in instance.candidates]
+    return median_value(values) < 0.18
+
+
 def time_budget_for_instance(instance):
     if is_complete_pair_dense_instance(instance):
-        return 7.2
+        return 7.6
     return 7.9
 
 
