@@ -56,7 +56,7 @@ def solve(input_text: str) -> list:
 
     global REJECT_PENALTY
     instance = parse_input(input_text)
-    REJECT_PENALTY = 85.0 if is_scarce_instance(instance) else 100.0
+    REJECT_PENALTY = 90.0 if is_scarce_instance(instance) else 100.0
     selected = portfolio_solve(instance, 7.0)
     return assignment_to_result(selected)
 
