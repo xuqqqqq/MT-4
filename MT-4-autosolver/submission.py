@@ -56,7 +56,12 @@ def solve(input_text: str) -> list:
 
     global REJECT_PENALTY
     instance = parse_input(input_text)
-    REJECT_PENALTY = 90.0 if is_scarce_instance(instance) else 100.0
+    if is_scarce_instance(instance):
+        REJECT_PENALTY = 90.0
+    elif is_complete_pair_dense_instance(instance):
+        REJECT_PENALTY = 120.0
+    else:
+        REJECT_PENALTY = 100.0
     selected = portfolio_solve(instance, time_budget_for_instance(instance))
     return assignment_to_result(selected)
 
@@ -197,6 +202,12 @@ def portfolio_solve(instance, time_limit_sec):
             best_obj = obj
     if is_scarce_instance(instance) and not expired(deadline):
         selected = scarce_courier_reassignment(instance, best, deadline)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
+    if is_complete_pair_dense_instance(instance):
+        selected = scarce_courier_reassignment(instance, best, time.perf_counter() + 0.45)
         obj = evaluate(instance, selected)
         if better(obj, best_obj):
             best = selected
@@ -790,7 +801,7 @@ def is_scarce_instance(instance):
 
 def time_budget_for_instance(instance):
     if is_complete_pair_dense_instance(instance):
-        return 7.05
+        return 6.8
     return 7.9
 
 
