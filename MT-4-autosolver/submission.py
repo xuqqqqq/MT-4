@@ -56,17 +56,14 @@ def solve(input_text: str) -> list:
 
     global REJECT_PENALTY
     instance = parse_input(input_text)
-    REJECT_PENALTY = configured_reject_penalty(instance)
+    if is_scarce_instance(instance):
+        REJECT_PENALTY = 90.0
+    elif is_complete_pair_dense_instance(instance):
+        REJECT_PENALTY = 120.0
+    else:
+        REJECT_PENALTY = 100.0
     selected = portfolio_solve(instance, time_budget_for_instance(instance))
     return assignment_to_result(selected)
-
-
-def configured_reject_penalty(instance):
-    if is_scarce_instance(instance):
-        return 90.0
-    if is_complete_pair_dense_instance(instance):
-        return 120.0
-    return 100.0
 
 
 def parse_input(input_text):
@@ -499,9 +496,6 @@ def selected_from_options(options):
 def repair_search(instance, seed_selected, deadline):
     best = normalize_selected(instance, seed_selected)
     best_obj = evaluate(instance, best)
-    track_reassigned_best = is_complete_pair_dense_instance(instance)
-    reassigned_best = best
-    reassigned_best_obj = best_obj
     fill_order = sorted(
         instance.candidates,
         key=lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness, c.task_key, c.courier_id),
@@ -519,18 +513,6 @@ def repair_search(instance, seed_selected, deadline):
         if better(obj, best_obj):
             best = selected
             best_obj = obj
-            if track_reassigned_best and deadline - time.perf_counter() > 0.12:
-                reassigned = scarce_courier_reassignment(
-                    instance,
-                    selected,
-                    min(deadline, time.perf_counter() + 0.12),
-                )
-                reassigned_obj = evaluate(instance, reassigned)
-                if better(reassigned_obj, reassigned_best_obj):
-                    reassigned_best = reassigned
-                    reassigned_best_obj = reassigned_obj
-    if track_reassigned_best and better(reassigned_best_obj, best_obj):
-        return reassigned_best
     return best
 
 
@@ -760,25 +742,6 @@ def limited_repair_candidates(instance):
                 continue
             seen.add(key)
             selected.append(candidate)
-
-    if is_complete_pair_dense_instance(instance):
-        add_many(
-            sorted(instance.candidates, key=lambda c: (-len(c.tasks), candidate_penalty(c) / len(c.tasks), c.score)),
-            170,
-        )
-        add_many(
-            sorted(instance.candidates, key=lambda c: (c.score - 50.0 * len(c.tasks) * c.willingness, c.score)),
-            140,
-        )
-        add_many(
-            sorted(instance.candidates, key=lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness)),
-            160,
-        )
-        add_many(
-            sorted(instance.candidates, key=lambda c: (c.score / max(c.willingness, 1e-9), c.score, c.task_key)),
-            80,
-        )
-        return selected
 
     add_many(
         sorted(instance.candidates, key=lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness)),
