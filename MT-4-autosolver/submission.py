@@ -55,9 +55,11 @@ def solve(input_text: str) -> list:
     """Contest entrypoint: return [(task_id_list_str, [courier_id, ...]), ...]."""
 
     global REJECT_PENALTY
+    start_time = time.perf_counter()
     instance = parse_input(input_text)
-    REJECT_PENALTY = 90.0 if is_scarce_instance(instance) else 100.0
+    REJECT_PENALTY = initial_reject_penalty(instance)
     selected = portfolio_solve(instance, 7.0)
+    selected = post_optimize_couriers(instance, selected, start_time + 7.65)
     return assignment_to_result(selected)
 
 
@@ -113,6 +115,12 @@ def portfolio_solve(instance, time_limit_sec):
 
     if is_scarce_instance(instance) or has_strong_bundle_discount(instance):
         selected = pair_only_starts(instance, deadline)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
+    if is_low_willingness_instance(instance):
+        selected = low_willing_pair4_starts(instance, deadline)
         obj = evaluate(instance, selected)
         if better(obj, best_obj):
             best = selected
@@ -282,6 +290,29 @@ def pair_only_starts(instance, deadline):
             break
         selected = choose_disjoint(instance, sorted(pair_candidates, key=key_func), deadline, None)
         selected = expand_multi_offers(instance, selected, max_offers, min_gain, deadline)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
+    return best
+
+
+def low_willing_pair4_starts(instance, deadline):
+    pair_candidates = [candidate for candidate in instance.candidates if len(candidate.tasks) > 1]
+    if not pair_candidates:
+        return {}
+    best = {}
+    best_obj = evaluate(instance, best)
+    strategies = (
+        lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness, c.task_key),
+        lambda c: (-len(c.tasks), candidate_penalty(c) / len(c.tasks), c.score, c.task_key),
+        lambda c: (c.score / max(c.willingness, 1e-9), c.score, c.task_key),
+    )
+    for key_func in strategies:
+        if expired(deadline):
+            break
+        selected = choose_disjoint(instance, sorted(pair_candidates, key=key_func), deadline, None)
+        selected = expand_multi_offers(instance, selected, 4, 0.0, deadline)
         obj = evaluate(instance, selected)
         if better(obj, best_obj):
             best = selected
@@ -481,6 +512,162 @@ def repair_search(instance, seed_selected, deadline):
     return best
 
 
+def post_optimize_couriers(instance, selected, deadline):
+    if expired(deadline) or len(selected) <= 1:
+        return selected
+    saved_penalty = REJECT_PENALTY
+    baseline_obj = evaluate(instance, selected)
+    try:
+        set_reassignment_penalty(instance)
+        improved = courier_reassignment_search(instance, selected, deadline, 4)
+    finally:
+        set_reject_penalty(saved_penalty)
+    if better(evaluate(instance, improved), baseline_obj):
+        return improved
+    return selected
+
+
+def set_reassignment_penalty(instance):
+    set_reject_penalty(120.0)
+
+
+def set_reject_penalty(value):
+    global REJECT_PENALTY
+    REJECT_PENALTY = value
+
+
+def courier_reassignment_search(instance, seed_selected, deadline, max_group_size):
+    selected = {}
+    for task_set, value in seed_selected.items():
+        task_key, couriers = value
+        if couriers:
+            selected[task_set] = (task_key, list(couriers))
+    while not expired(deadline):
+        best_move = best_courier_reassignment_move(instance, selected, max_group_size, deadline)
+        if best_move is None or best_move[0] >= -1e-9:
+            break
+        apply_reassignment_move(selected, best_move)
+    return normalize_selected(instance, selected)
+
+
+def best_courier_reassignment_move(instance, selected, max_group_size, deadline):
+    items = list(selected.items())
+    if len(items) <= 1:
+        return None
+    group_penalties = {}
+    for task_set, value in items:
+        if expired(deadline):
+            return None
+        task_key, couriers = value
+        group_penalties[task_set] = reassignment_group_penalty(instance, task_set, task_key, couriers)
+
+    best_move = None
+    for source_set, source_value in items:
+        if expired(deadline):
+            return best_move
+        source_key, source_couriers = source_value
+        for courier_id in list(source_couriers):
+            for target_set, target_value in items:
+                if source_set == target_set:
+                    continue
+                target_key, target_couriers = target_value
+                if len(target_couriers) >= max_group_size:
+                    continue
+                if instance.by_offer.get((target_key, courier_id)) is None:
+                    continue
+                delta = reassignment_group_penalty(
+                    instance,
+                    source_set,
+                    source_key,
+                    remove_one(source_couriers, courier_id),
+                )
+                delta += reassignment_group_penalty(
+                    instance,
+                    target_set,
+                    target_key,
+                    list(target_couriers) + [courier_id],
+                )
+                delta -= group_penalties[source_set] + group_penalties[target_set]
+                if best_move is None or delta < best_move[0]:
+                    best_move = (delta, "move", source_set, target_set, courier_id, None)
+
+    for left_index in range(len(items)):
+        if expired(deadline):
+            return best_move
+        left_set, left_value = items[left_index]
+        left_key, left_couriers = left_value
+        for right_index in range(left_index + 1, len(items)):
+            right_set, right_value = items[right_index]
+            right_key, right_couriers = right_value
+            for left_courier in left_couriers:
+                if instance.by_offer.get((right_key, left_courier)) is None:
+                    continue
+                for right_courier in right_couriers:
+                    if instance.by_offer.get((left_key, right_courier)) is None:
+                        continue
+                    delta = reassignment_group_penalty(
+                        instance,
+                        left_set,
+                        left_key,
+                        replace_one(left_couriers, left_courier, right_courier),
+                    )
+                    delta += reassignment_group_penalty(
+                        instance,
+                        right_set,
+                        right_key,
+                        replace_one(right_couriers, right_courier, left_courier),
+                    )
+                    delta -= group_penalties[left_set] + group_penalties[right_set]
+                    if best_move is None or delta < best_move[0]:
+                        best_move = (delta, "swap", left_set, right_set, left_courier, right_courier)
+    return best_move
+
+
+def apply_reassignment_move(selected, move):
+    _, move_type, source_set, target_set, courier_id, other_courier = move
+    source_key, source_couriers = selected[source_set]
+    target_key, target_couriers = selected[target_set]
+    if move_type == "move":
+        selected[source_set] = (source_key, remove_one(source_couriers, courier_id))
+        selected[target_set] = (target_key, list(target_couriers) + [courier_id])
+    else:
+        selected[source_set] = (source_key, replace_one(source_couriers, courier_id, other_courier))
+        selected[target_set] = (target_key, replace_one(target_couriers, other_courier, courier_id))
+
+
+def reassignment_group_penalty(instance, task_set, task_key, couriers):
+    candidates = []
+    for courier_id in couriers:
+        candidate = instance.by_offer.get((task_key, courier_id))
+        if candidate is not None:
+            candidates.append(candidate)
+    candidates.sort(key=lambda c: (c.score, -c.willingness, c.courier_id))
+    return group_expected_penalty(task_set, candidates)
+
+
+def remove_one(items, value):
+    removed = False
+    result = []
+    for item in items:
+        if not removed and item == value:
+            removed = True
+            continue
+        result.append(item)
+    return result
+
+
+def replace_one(items, old_value, new_value):
+    replaced = False
+    result = []
+    for item in items:
+        if not replaced and item == old_value:
+            result.append(new_value)
+            replaced = True
+        else:
+            result.append(item)
+    return result
+
+
 def limited_repair_candidates(instance):
     selected = []
     seen = set()
@@ -561,6 +748,8 @@ def normalize_selected(instance, selected):
     normalized = {}
     for task_set, value in selected.items():
         task_key, couriers = value
+        if not couriers:
+            continue
         normalized[task_set] = (
             task_key,
             sorted(
@@ -585,6 +774,28 @@ def is_scarce_instance(instance):
     return courier_count(instance) <= task_count * 1.15
 
 
+def initial_reject_penalty(instance):
+    if is_scarce_instance(instance):
+        return 90.0
+    if is_large_dense_instance(instance):
+        return 150.0
+    return 100.0
+
+
+def is_large_dense_instance(instance):
+    task_count = len(instance.task_ids)
+    if task_count < 38:
+        return False
+    if courier_count(instance) < task_count * 1.8:
+        return False
+    pair_count = 0
+    for task_set in instance.by_task_set:
+        if len(task_set) == 2:
+            pair_count += 1
+    expected_pairs = task_count * (task_count - 1) // 2
+    return pair_count >= expected_pairs * 0.95
+
+
 def courier_count(instance):
     couriers = set()
     for candidate in instance.candidates:
@@ -603,6 +814,18 @@ def has_strong_bundle_discount(instance):
     if not single_scores or not bundle_scores:
         return False
     return median_value(bundle_scores) <= 0.68 * median_value(single_scores)
+
+
+def is_low_willingness_instance(instance):
+    task_count = len(instance.task_ids)
+    if task_count == 0:
+        return False
+    if courier_count(instance) < task_count * 1.8:
+        return False
+    values = []
+    for candidate in instance.candidates:
+        values.append(candidate.willingness)
+    return median_value(values) < 0.18
 
 
 def median_value(values):
