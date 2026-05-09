@@ -125,6 +125,13 @@ def portfolio_solve(instance, time_limit_sec):
         if better(obj, best_obj):
             best = selected
             best_obj = obj
+    if len(instance.task_ids) < 38 and is_low_willingness_instance(instance) and not expired(deadline):
+        selected = low_willing_pair_starts(instance, deadline)
+        if selected:
+            obj = evaluate(instance, selected)
+            if better(obj, best_obj) or not best:
+                return normalize_selected(instance, selected)
+            return normalize_selected(instance, best)
     strategies = []
     add_strategy(strategies, lambda c: (c.score, c.task_key, c.courier_id), 1, 0.0, None)
     add_strategy(strategies, lambda c: (c.score / len(c.tasks), c.score, c.task_key, c.courier_id), 1, 0.0, None)
@@ -313,6 +320,79 @@ def pair_only_starts(instance, deadline):
             best = selected
             best_obj = obj
     return best
+
+
+def low_willing_pair_starts(instance, deadline):
+    pair_candidates = [candidate for candidate in instance.candidates if len(candidate.tasks) > 1]
+    if not pair_candidates:
+        return {}
+    best = {}
+    best_obj = evaluate(instance, best)
+    strategies = (
+        lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness, c.task_key),
+        lambda c: (c.score / max(c.willingness, 1e-9), c.score, c.task_key),
+        lambda c: (-c.willingness, c.score, c.task_key, c.courier_id),
+        lambda c: (c.score / len(c.tasks), c.score, -c.willingness, c.task_key),
+        lambda c: (c.score - 80.0 * len(c.tasks) * c.willingness, c.score, c.task_key),
+    )
+    for max_offers in (4, 5):
+        for key_func in strategies:
+            if expired(deadline):
+                break
+            selected = choose_disjoint(instance, sorted(pair_candidates, key=key_func), deadline, None)
+            selected = expand_multi_offers_stable(instance, selected, max_offers, 0.0, deadline)
+            obj = evaluate(instance, selected)
+            if better(obj, best_obj):
+                best = selected
+                best_obj = obj
+    return best
+
+
+def expand_multi_offers_stable(instance, selected, max_offers_per_bundle, min_marginal_gain, deadline):
+    expanded = {}
+    for task_set, value in selected.items():
+        expanded[task_set] = (value[0], list(value[1]))
+
+    used_couriers = set()
+    for _, couriers in expanded.values():
+        used_couriers.update(couriers)
+
+    miss_probability = {}
+    for task_set, value in expanded.items():
+        task_key, couriers = value
+        probabilities = []
+        for courier_id in couriers:
+            candidate = instance.by_offer.get((task_key, courier_id))
+            if candidate is not None:
+                probabilities.append(candidate.willingness)
+        miss_probability[task_set] = 1.0 - acceptance_probability(probabilities)
+
+    ranked = []
+    for task_set, value in expanded.items():
+        _, couriers = value
+        for candidate in instance.by_task_set.get(task_set, ()):
+            if candidate.courier_id in couriers:
+                continue
+            gain = miss_probability[task_set] * candidate.willingness * (REJECT_PENALTY * len(task_set) - candidate.score)
+            if gain >= min_marginal_gain:
+                ranked.append((-gain / max(candidate.score, 1e-9), candidate.score, candidate.task_key, candidate.courier_id, candidate))
+
+    for _, _, _, _, candidate in sorted(ranked):
+        if expired(deadline):
+            break
+        task_set = candidate.task_set
+        task_key, couriers = expanded[task_set]
+        if len(couriers) >= max_offers_per_bundle:
+            continue
+        if candidate.courier_id in used_couriers:
+            continue
+        gain = miss_probability[task_set] * candidate.willingness * (REJECT_PENALTY * len(task_set) - candidate.score)
+        if gain < min_marginal_gain:
+            continue
+        couriers.append(candidate.courier_id)
+        used_couriers.add(candidate.courier_id)
+        miss_probability[task_set] *= 1.0 - candidate.willingness
+    return expanded
 
 
 def option_search_solve(instance, deadline):
@@ -836,7 +916,9 @@ def is_low_willingness_instance(instance):
     if courier_count(instance) < len(instance.task_ids) * 1.8:
         return False
     values = [candidate.willingness for candidate in instance.candidates]
-    return median_value(values) < 0.18
+    if median_value(values) >= 0.30:
+        return False
+    return not is_high_noise_instance(instance)
 
 
 def is_compact_bundle_instance(instance):
@@ -845,6 +927,14 @@ def is_compact_bundle_instance(instance):
     if is_low_willingness_instance(instance) or is_scarce_instance(instance) or is_complete_pair_dense_instance(instance):
         return False
     return has_strong_bundle_discount(instance)
+
+
+def is_high_noise_instance(instance):
+    scores = [candidate.score for candidate in instance.candidates]
+    if len(scores) < 100:
+        return False
+    scores.sort()
+    return scores[int(len(scores) * 0.99)] >= 140.0
 
 
 def time_budget_for_instance(instance):
