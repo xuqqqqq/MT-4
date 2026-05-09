@@ -113,5 +113,7 @@ Known stable-ish score profile:
 - Verification: stable-vs-current comparison on true `large_seed301` plus generated hidden-like cases showed only true dense `large_seed301` changed (`702.354 -> 694.855`, `6.882s -> 5.893s`); every non-dense generated case had identical output hash.
 - Risk: synthetic complete-pair dense variants are not uniformly improved, so this is an online candidate aimed specifically at the official complete-pair large behavior.
 - Refinement: choose dense willingness weight `25` for low-willingness/full-cost dense cases like true `large_seed301`, and `35` for higher-willingness or stronger bundle-discount dense cases to reduce risk on large302-like variants.
-- Decision: keep for submission candidate.
-- Status: implemented.
+- Online evidence: average `762.15`; `large_seed301` worsened to `759.16`, `large_seed302` worsened to `723.97`, and no target case improved enough to compensate.
+- Decision: reverted.
+- Lesson: replacing the dense portfolio with a deterministic fast path overfits local `large_seed301`; official large behavior prefers the original portfolio even when local proxy says otherwise.
+- Status: failed online, code reverted.
