@@ -221,7 +221,8 @@ def portfolio_solve(instance, time_limit_sec):
 
 
 def complete_pair_dense_fast_solve(instance, deadline):
-    dense_key = lambda c: (c.score - 25.0 * len(c.tasks) * c.willingness, c.score, c.task_key)
+    willingness_weight = complete_pair_dense_weight(instance)
+    dense_key = lambda c: (c.score - willingness_weight * len(c.tasks) * c.willingness, c.score, c.task_key)
     selected = choose_disjoint(instance, sorted(instance.candidates, key=dense_key), deadline, None)
     selected = expand_multi_offers(instance, selected, 3, 0.01, deadline)
     best = normalize_selected(instance, selected)
@@ -253,6 +254,22 @@ def complete_pair_dense_fast_solve(instance, deadline):
     if better(obj, best_obj):
         best = selected
     return normalize_selected(instance, best)
+
+
+def complete_pair_dense_weight(instance):
+    willingness_values = [candidate.willingness for candidate in instance.candidates]
+    single_scores = []
+    pair_scores = []
+    for candidate in instance.candidates:
+        if len(candidate.tasks) == 1:
+            single_scores.append(candidate.score)
+        elif len(candidate.tasks) == 2:
+            pair_scores.append(candidate.score / 2.0)
+    if median_value(willingness_values) >= 0.32:
+        return 35.0
+    if single_scores and pair_scores and median_value(pair_scores) <= 0.97 * median_value(single_scores):
+        return 35.0
+    return 25.0
 
 
 def add_strategy(strategies, key_func, max_offers, min_gain, margin):

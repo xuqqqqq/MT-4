@@ -112,5 +112,6 @@ Known stable-ish score profile:
 - Planned code change: add a complete-pair dense fast path at the start of `portfolio_solve`.
 - Verification: stable-vs-current comparison on true `large_seed301` plus generated hidden-like cases showed only true dense `large_seed301` changed (`702.354 -> 694.855`, `6.882s -> 5.893s`); every non-dense generated case had identical output hash.
 - Risk: synthetic complete-pair dense variants are not uniformly improved, so this is an online candidate aimed specifically at the official complete-pair large behavior.
+- Refinement: choose dense willingness weight `25` for low-willingness/full-cost dense cases like true `large_seed301`, and `35` for higher-willingness or stronger bundle-discount dense cases to reduce risk on large302-like variants.
 - Decision: keep for submission candidate.
 - Status: implemented.
