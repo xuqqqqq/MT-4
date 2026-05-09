@@ -103,3 +103,14 @@ Known stable-ish score profile:
 - Decision: reverted.
 - Lesson: low-only postprocessing still does not affect the official low case as expected and can perturb large-case online behavior. Do not submit post-portfolio fanout refinements.
 - Status: failed online, code reverted.
+
+## Active Experiment: Deterministic Dense Fast Path
+
+- Hypothesis: complete-pair dense large cases are score-unstable because time-bound `repair_search` stops after different candidate counts when code shape changes.
+- Local evidence: on true `large_seed301`, starting from the strongest dense strategy (`score - 25*w`, max 3 offers) and running a fixed 220 repair candidates reaches local expected penalty `694.855` in about `5.9s`; the current full portfolio reaches about `703.401` locally and online can fall to the `755+` band.
+- Guardrail: only activate for `is_complete_pair_dense_instance(instance)`; non-dense large/medium/scarce/low cases should keep the stable path.
+- Planned code change: add a complete-pair dense fast path at the start of `portfolio_solve`.
+- Verification: stable-vs-current comparison on true `large_seed301` plus generated hidden-like cases showed only true dense `large_seed301` changed (`702.354 -> 694.855`, `6.882s -> 5.893s`); every non-dense generated case had identical output hash.
+- Risk: synthetic complete-pair dense variants are not uniformly improved, so this is an online candidate aimed specifically at the official complete-pair large behavior.
+- Decision: keep for submission candidate.
+- Status: implemented.

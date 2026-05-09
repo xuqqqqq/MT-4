@@ -116,6 +116,8 @@ def parse_input(input_text):
 
 def portfolio_solve(instance, time_limit_sec):
     deadline = time.perf_counter() + time_limit_sec
+    if is_complete_pair_dense_instance(instance):
+        return complete_pair_dense_fast_solve(instance, deadline)
     best = {}
     best_obj = evaluate(instance, best)
 
@@ -215,6 +217,41 @@ def portfolio_solve(instance, time_limit_sec):
         if better(obj, best_obj):
             best = selected
             best_obj = obj
+    return normalize_selected(instance, best)
+
+
+def complete_pair_dense_fast_solve(instance, deadline):
+    dense_key = lambda c: (c.score - 25.0 * len(c.tasks) * c.willingness, c.score, c.task_key)
+    selected = choose_disjoint(instance, sorted(instance.candidates, key=dense_key), deadline, None)
+    selected = expand_multi_offers(instance, selected, 3, 0.01, deadline)
+    best = normalize_selected(instance, selected)
+    best_obj = evaluate(instance, best)
+
+    fill_order = sorted(
+        instance.candidates,
+        key=lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness, c.task_key, c.courier_id),
+    )
+    checked = 0
+    for candidate in limited_repair_candidates(instance):
+        if expired(deadline) or checked >= 220:
+            break
+        checked += 1
+        selected = replace_with_candidate(instance, best, candidate, fill_order, deadline)
+        selected = expand_multi_offers(instance, selected, 3, 0.005, deadline)
+        selected = normalize_selected(instance, selected)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
+
+    polish_deadline = deadline
+    short_deadline = time.perf_counter() + 0.45
+    if short_deadline < polish_deadline:
+        polish_deadline = short_deadline
+    selected = scarce_courier_reassignment(instance, best, polish_deadline)
+    obj = evaluate(instance, selected)
+    if better(obj, best_obj):
+        best = selected
     return normalize_selected(instance, best)
 
 
