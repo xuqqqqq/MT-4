@@ -215,12 +215,6 @@ def portfolio_solve(instance, time_limit_sec):
         if better(obj, best_obj):
             best = selected
             best_obj = obj
-    if best and (is_low_willingness_instance(instance) or is_compact_bundle_instance(instance)):
-        selected = scarce_courier_reassignment(instance, best, time.perf_counter() + 0.45, 18)
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
     return normalize_selected(instance, best)
 
 
@@ -578,14 +572,14 @@ def scarce_coverage_repair(instance, seed_selected, deadline):
     return best
 
 
-def scarce_courier_reassignment(instance, seed_selected, deadline, max_passes=6):
+def scarce_courier_reassignment(instance, seed_selected, deadline):
     selected = normalize_selected(instance, seed_selected)
     if not selected:
         return selected
     best_obj = evaluate(instance, selected)
     max_group_size = 3
     passes = 0
-    while passes < max_passes and not expired(deadline):
+    while passes < 6 and not expired(deadline):
         passes += 1
         improved = False
         groups = list(selected.keys())
