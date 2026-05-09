@@ -58,8 +58,6 @@ def solve(input_text: str) -> list:
     instance = parse_input(input_text)
     REJECT_PENALTY = configured_reject_penalty(instance)
     selected = portfolio_solve(instance, time_budget_for_instance(instance))
-    if len(instance.task_ids) <= 15:
-        selected = small_beam_search(instance, selected, time.perf_counter() + 2.0)
     return assignment_to_result(selected)
 
 
@@ -484,93 +482,6 @@ def selected_from_options(options):
     for option in options:
         selected[option.task_set] = (option.task_key, list(option.courier_ids))
     return selected
-
-
-def small_beam_search(instance, seed_selected, deadline):
-    options = build_group_options(instance, deadline)
-    if not options:
-        return seed_selected
-
-    task_index = {}
-    for index, task_id in enumerate(instance.task_ids):
-        task_index[task_id] = index
-
-    courier_ids = sorted(set(candidate.courier_id for candidate in instance.candidates))
-    courier_index = {}
-    for index, courier_id in enumerate(courier_ids):
-        courier_index[courier_id] = index
-
-    records = []
-    for option in options:
-        if option.savings <= 1e-9:
-            continue
-        task_mask = 0
-        valid = True
-        for task_id in option.task_set:
-            index = task_index.get(task_id)
-            if index is None:
-                valid = False
-                break
-            task_mask |= 1 << index
-        if not valid:
-            continue
-        courier_mask = 0
-        for courier_id in option.courier_ids:
-            index = courier_index.get(courier_id)
-            if index is None:
-                valid = False
-                break
-            courier_mask |= 1 << index
-        if valid:
-            records.append((task_mask, courier_mask, option.savings, option))
-    if not records:
-        return seed_selected
-
-    records.sort(key=lambda item: (-item[2], item[3].penalty, len(item[3].courier_ids), item[3].task_key))
-    beam_limit = 700 if len(instance.task_ids) <= 8 else 500
-    states = [(0, 0, 0.0, ())]
-    seen = {(0, 0): 0.0}
-    for task_mask, courier_mask, savings, option in records:
-        if expired(deadline):
-            break
-        additions = []
-        for state_task_mask, state_courier_mask, state_savings, state_options in states:
-            if task_mask & state_task_mask or courier_mask & state_courier_mask:
-                continue
-            new_task_mask = state_task_mask | task_mask
-            new_courier_mask = state_courier_mask | courier_mask
-            new_savings = state_savings + savings
-            key = (new_task_mask, new_courier_mask)
-            old_savings = seen.get(key)
-            if old_savings is not None and old_savings >= new_savings - 1e-9:
-                continue
-            seen[key] = new_savings
-            additions.append((new_task_mask, new_courier_mask, new_savings, state_options + (option,)))
-        if additions:
-            states.extend(additions)
-            if len(states) > beam_limit * 2:
-                states.sort(key=lambda item: (-item[2], -bit_count(item[0]), bit_count(item[1])))
-                states = states[:beam_limit]
-
-    best = normalize_selected(instance, seed_selected)
-    best_obj = evaluate(instance, best)
-    for _, _, _, state_options in sorted(states, key=lambda item: -item[2])[:beam_limit]:
-        if expired(deadline):
-            break
-        selected = selected_from_options(state_options)
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
-    return best
-
-
-def bit_count(value):
-    count = 0
-    while value:
-        value &= value - 1
-        count += 1
-    return count
 
 
 def repair_search(instance, seed_selected, deadline):
