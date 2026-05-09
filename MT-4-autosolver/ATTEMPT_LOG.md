@@ -117,3 +117,13 @@ Known stable-ish score profile:
 - Decision: reverted.
 - Lesson: replacing the dense portfolio with a deterministic fast path overfits local `large_seed301`; official large behavior prefers the original portfolio even when local proxy says otherwise.
 - Status: failed online, code reverted.
+
+## Active Experiment: Preserve Algorithm, Reduce Runtime Variance
+
+- Hypothesis: the stable portfolio is close to the best known line, but online results vary because the time-bound loops stop at different points; safe micro-optimizations may let the same algorithm run more consistently.
+- Local evidence: `cProfile` on true `large_seed301` shows `Candidate.task_set` triggers hundreds of thousands of repeated `sorted(self.tasks)` calls.
+- Planned code change: cache each candidate's sorted task set and task count during parsing; do not alter strategy order, objective, or solver decisions.
+- Verification: unit tests passed; all generated hidden-like non-dense case hashes stayed identical. True `large_seed301` still follows the original portfolio but can reach one extra repair step locally (`702.354 -> 701.481`) because the same time budget is spent on more search.
+- Risk: true `large_seed301` output remains time-bound and can oscillate between nearby hashes, so this is a runtime-stability candidate rather than a guaranteed score improvement.
+- Decision: keep for submission candidate.
+- Status: implemented.
