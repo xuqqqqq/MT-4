@@ -186,7 +186,10 @@ def portfolio_solve(instance, time_limit_sec):
             best = selected
             best_obj = obj
     if not expired(deadline):
-        selected = repair_search(instance, best, deadline)
+        if is_complete_pair_dense_instance(instance) and not has_strong_bundle_discount(instance):
+            selected = repair_search(instance, best, time.perf_counter() + 5.2, 170)
+        else:
+            selected = repair_search(instance, best, deadline)
         obj = evaluate(instance, selected)
         if better(obj, best_obj):
             best = selected
@@ -484,7 +487,7 @@ def selected_from_options(options):
     return selected
 
 
-def repair_search(instance, seed_selected, deadline):
+def repair_search(instance, seed_selected, deadline, max_checked=360):
     best = normalize_selected(instance, seed_selected)
     best_obj = evaluate(instance, best)
     fill_order = sorted(
@@ -494,7 +497,7 @@ def repair_search(instance, seed_selected, deadline):
     repair_candidates = limited_repair_candidates(instance)
     checked = 0
     for candidate in repair_candidates:
-        if expired(deadline) or checked >= 360:
+        if expired(deadline) or checked >= max_checked:
             break
         checked += 1
         selected = replace_with_candidate(instance, best, candidate, fill_order, deadline)
