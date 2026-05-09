@@ -90,3 +90,14 @@ Known stable-ish score profile:
 - Build local diagnostics before changing the submission path: strategy attribution, output hashes, and per-branch timing on true `large_seed301`.
 - Prefer structural alternatives that can be compared offline without touching `submission.py` first.
 - If a new idea is tried in `submission.py`, require a clear predicted target case, unchanged large-case behavior when intended, and an explicit rollback plan.
+
+## Active Experiment: Structural Search for Scarce/Low Cases
+
+- Hypothesis: the remaining useful gain is more likely in `scarce_couriers_seed401` and `low_willingness_seed501` than in dense large-case micro-tuning.
+- Guardrail: avoid changing dense large-case behavior unless a local diagnostic clearly proves why it should improve.
+- Planned local evidence: strategy attribution, output hashes, coverage/offers, and expected-penalty comparison on true `large_seed301` plus hidden-like generated cases.
+- Local evidence: low-willingness generated case is the only hidden-like case classified by `is_low_willingness_instance`; expanding the current best low solution from max 3 offers to max 6 offers after option search improves local expected penalty from `1592.432` to `1439.004` with unchanged coverage and all 75 couriers used.
+- Planned code change: add a low-only final fanout refinement on the incumbent, not an early-return fanout branch.
+- Verification: compared current code against stable `HEAD:MT-4-autosolver/submission.py` on true `large_seed301` plus all generated hidden-like cases; every non-low case had identical output hash, while low improved from `1592.432` to `1439.004`.
+- Decision: keep for submission candidate.
+- Status: implemented.

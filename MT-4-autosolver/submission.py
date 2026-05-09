@@ -215,6 +215,13 @@ def portfolio_solve(instance, time_limit_sec):
         if better(obj, best_obj):
             best = selected
             best_obj = obj
+    if is_low_willingness_instance(instance) and not expired(deadline):
+        selected = expand_multi_offers(instance, best, 6, 0.0, deadline)
+        selected = normalize_selected(instance, selected)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
     return normalize_selected(instance, best)
 
 
