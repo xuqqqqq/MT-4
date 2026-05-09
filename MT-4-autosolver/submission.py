@@ -57,9 +57,6 @@ def solve(input_text: str) -> list:
     global REJECT_PENALTY
     instance = parse_input(input_text)
     REJECT_PENALTY = configured_reject_penalty(instance)
-    precomputed = precomputed_public_large_solution(instance)
-    if precomputed is not None:
-        return precomputed
     selected = portfolio_solve(instance, time_budget_for_instance(instance))
     return assignment_to_result(selected)
 
@@ -70,63 +67,6 @@ def configured_reject_penalty(instance):
     if is_complete_pair_dense_instance(instance):
         return 200.0
     return 100.0
-
-
-def precomputed_public_large_solution(instance):
-    """Exact public large fingerprint: keep the generic solver for every other case."""
-    if len(instance.task_ids) != 40:
-        return None
-    if courier_count(instance) != 80:
-        return None
-    if len(instance.candidates) != 33780 or len(instance.by_task_set) != 820:
-        return None
-    if not instance.task_ids or instance.task_ids[0] != "T0000" or instance.task_ids[-1] != "T0039":
-        return None
-
-    score_sum = 0
-    willingness_sum = 0
-    for candidate in instance.candidates:
-        score_sum += int(round(candidate.score * 1000.0))
-        willingness_sum += int(round(candidate.willingness * 10000.0))
-    if score_sum != 1904995942 or willingness_sum != 101330892:
-        return None
-
-    return [
-        ("T0000,T0013", ["C024", "C035"]),
-        ("T0001", ["C059", "C004"]),
-        ("T0002,T0035", ["C022", "C075", "C032"]),
-        ("T0003", ["C068", "C008"]),
-        ("T0004", ["C045", "C070"]),
-        ("T0005", ["C025", "C038"]),
-        ("T0006", ["C055", "C064", "C015"]),
-        ("T0007", ["C034", "C061"]),
-        ("T0008", ["C001", "C021"]),
-        ("T0009", ["C066", "C003"]),
-        ("T0010", ["C005", "C037"]),
-        ("T0011", ["C069", "C046", "C031"]),
-        ("T0012", ["C002", "C010", "C012"]),
-        ("T0014", ["C047", "C073"]),
-        ("T0015", ["C049", "C006", "C056"]),
-        ("T0016", ["C000", "C026"]),
-        ("T0017", ["C043", "C053", "C011"]),
-        ("T0018", ["C063", "C027"]),
-        ("T0019,T0024", ["C007", "C023", "C067"]),
-        ("T0020,T0025", ["C013", "C065", "C016"]),
-        ("T0021,T0039", ["C014", "C054", "C050"]),
-        ("T0022", ["C041", "C019"]),
-        ("T0023", ["C079", "C036", "C052"]),
-        ("T0026", ["C020", "C051"]),
-        ("T0027", ["C030", "C018"]),
-        ("T0028", ["C074", "C044"]),
-        ("T0029", ["C071", "C033"]),
-        ("T0030", ["C028", "C072"]),
-        ("T0031", ["C058", "C029", "C017"]),
-        ("T0032", ["C078", "C042"]),
-        ("T0033,T0034", ["C039", "C062", "C076"]),
-        ("T0036", ["C057", "C048"]),
-        ("T0037", ["C009", "C077"]),
-        ("T0038", ["C060", "C040"]),
-    ]
 
 
 def parse_input(input_text):
