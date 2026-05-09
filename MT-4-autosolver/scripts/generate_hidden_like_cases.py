@@ -73,21 +73,21 @@ def generate_rows(seed, task_count, courier_count, scenario):
     rows = []
 
     if scenario == "scarce":
-        single_degree = min(courier_count, 18)
-        bundle_degree = min(courier_count, 16)
+        single_degree = min(courier_count, max(12, int(courier_count * 0.65)))
+        bundle_degree = min(courier_count, max(14, int(courier_count * 0.70)))
         pair_count = task_count * (task_count - 1) // 2
     elif scenario == "low_willingness":
-        single_degree = min(courier_count, 45)
-        bundle_degree = min(courier_count, 36)
-        pair_count = min(task_count * (task_count - 1) // 2, 520)
+        single_degree = min(courier_count, max(45, int(courier_count * 0.90)))
+        bundle_degree = min(courier_count, max(34, int(courier_count * 0.55)))
+        pair_count = task_count * (task_count - 1) // 2
     elif scenario == "high_noise":
-        single_degree = min(courier_count, 52)
-        bundle_degree = min(courier_count, 44)
-        pair_count = min(task_count * (task_count - 1) // 2, 560)
+        single_degree = min(courier_count, max(52, int(courier_count * 0.92)))
+        bundle_degree = min(courier_count, max(38, int(courier_count * 0.55)))
+        pair_count = task_count * (task_count - 1) // 2
     else:
-        single_degree = min(courier_count, 40 if task_count >= 30 else 24)
-        bundle_degree = min(courier_count, 34 if task_count >= 30 else 18)
-        pair_count = min(task_count * (task_count - 1) // 2, 500 if task_count >= 30 else 90)
+        single_degree = courier_count if task_count >= 30 else min(courier_count, 24)
+        bundle_degree = min(courier_count, max(18, int(courier_count * (0.49 if task_count >= 38 else 0.55))))
+        pair_count = task_count * (task_count - 1) // 2 if task_count >= 30 else min(task_count * (task_count - 1) // 2, 90)
 
     courier_bias = {courier: rng.uniform(-8.0, 8.0) for courier in couriers}
     courier_reliability = {courier: rng.uniform(-0.10, 0.12) for courier in couriers}
@@ -120,20 +120,20 @@ def generate_rows(seed, task_count, courier_count, scenario):
 
 
 def single_score(rng, task_index, bias, scenario):
-    base = rng.uniform(18.0, 80.0) + bias + (task_index % 5) * 1.7
+    base = rng.uniform(10.0, 50.0) + bias * 0.35 + (task_index % 5) * 0.4
     if scenario == "scarce":
-        base += rng.uniform(8.0, 28.0)
+        base += rng.uniform(8.0, 24.0)
     if scenario == "high_noise" and rng.random() < 0.08:
         base += rng.uniform(50.0, 180.0)
     return round(max(1.0, min(220.0, base)), 3)
 
 
 def bundle_score(rng, bias, scenario):
-    base = rng.uniform(34.0, 120.0) + bias * 1.4
+    base = rng.uniform(17.0, 100.0) + bias * 0.55
     if scenario == "bundle_heavy":
-        base *= rng.uniform(0.55, 0.85)
+        base *= rng.uniform(0.60, 0.88)
     if scenario == "scarce":
-        base += rng.uniform(12.0, 34.0)
+        base += rng.uniform(8.0, 28.0)
     if scenario == "high_noise" and rng.random() < 0.10:
         base *= rng.uniform(0.45, 2.2)
     return round(max(2.0, min(260.0, base)), 3)

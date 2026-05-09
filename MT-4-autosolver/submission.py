@@ -125,6 +125,12 @@ def portfolio_solve(instance, time_limit_sec):
         if better(obj, best_obj):
             best = selected
             best_obj = obj
+    if is_low_willingness_instance(instance) and not expired(deadline):
+        selected = low_willing_pair_starts(instance, deadline)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
     strategies = []
     add_strategy(strategies, lambda c: (c.score, c.task_key, c.courier_id), 1, 0.0, None)
     add_strategy(strategies, lambda c: (c.score / len(c.tasks), c.score, c.task_key, c.courier_id), 1, 0.0, None)
@@ -271,9 +277,9 @@ def expand_multi_offers(instance, selected, max_offers_per_bundle, min_marginal_
                 continue
             gain = miss_probability[task_set] * candidate.willingness * (REJECT_PENALTY * len(task_set) - candidate.score)
             if gain >= min_marginal_gain:
-                ranked.append((-gain / max(candidate.score, 1e-9), candidate.score, candidate))
+                ranked.append((-gain / max(candidate.score, 1e-9), candidate.score, candidate.task_key, candidate.courier_id, candidate))
 
-    for _, _, candidate in sorted(ranked):
+    for _, _, _, _, candidate in sorted(ranked):
         if expired(deadline):
             break
         task_set = candidate.task_set
@@ -312,6 +318,32 @@ def pair_only_starts(instance, deadline):
         if better(obj, best_obj):
             best = selected
             best_obj = obj
+    return best
+
+
+def low_willing_pair_starts(instance, deadline):
+    pair_candidates = [candidate for candidate in instance.candidates if len(candidate.tasks) > 1]
+    if not pair_candidates:
+        return {}
+    best = {}
+    best_obj = evaluate(instance, best)
+    strategies = (
+        lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness, c.task_key),
+        lambda c: (c.score / max(c.willingness, 1e-9), c.score, c.task_key),
+        lambda c: (-c.willingness, c.score, c.task_key, c.courier_id),
+        lambda c: (c.score / len(c.tasks), c.score, -c.willingness, c.task_key),
+        lambda c: (c.score - 80.0 * len(c.tasks) * c.willingness, c.score, c.task_key),
+    )
+    for max_offers in (4, 5):
+        for key_func in strategies:
+            if expired(deadline):
+                break
+            selected = choose_disjoint(instance, sorted(pair_candidates, key=key_func), deadline, None)
+            selected = expand_multi_offers(instance, selected, max_offers, 0.0, deadline)
+            obj = evaluate(instance, selected)
+            if better(obj, best_obj):
+                best = selected
+                best_obj = obj
     return best
 
 
@@ -717,6 +749,8 @@ def scarce_uncovered_candidates(instance, uncovered):
             candidate.score / max(candidate.willingness, 1e-9),
             candidate.score,
             -candidate.willingness,
+            candidate.task_key,
+            candidate.courier_id,
             candidate,
         ))
     return [item[-1] for item in sorted(ranked)]
@@ -849,7 +883,7 @@ def is_compact_bundle_instance(instance):
 
 def time_budget_for_instance(instance):
     if is_complete_pair_dense_instance(instance):
-        return 6.8
+        return 8.5
     return 7.9
 
 
