@@ -99,5 +99,7 @@ Known stable-ish score profile:
 - Local evidence: low-willingness generated case is the only hidden-like case classified by `is_low_willingness_instance`; expanding the current best low solution from max 3 offers to max 6 offers after option search improves local expected penalty from `1592.432` to `1439.004` with unchanged coverage and all 75 couriers used.
 - Planned code change: add a low-only final fanout refinement on the incumbent, not an early-return fanout branch.
 - Verification: compared current code against stable `HEAD:MT-4-autosolver/submission.py` on true `large_seed301` plus all generated hidden-like cases; every non-low case had identical output hash, while low improved from `1592.432` to `1439.004`.
-- Decision: keep for submission candidate.
-- Status: implemented.
+- Online evidence: average `760.40`; `low_willingness_seed501` stayed at `1830.54`, while `large_seed301` regressed to `755.68` and `large_seed302` stayed in the bad `703.32` band.
+- Decision: reverted.
+- Lesson: low-only postprocessing still does not affect the official low case as expected and can perturb large-case online behavior. Do not submit post-portfolio fanout refinements.
+- Status: failed online, code reverted.
