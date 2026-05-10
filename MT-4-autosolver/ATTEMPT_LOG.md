@@ -117,16 +117,16 @@ Known stable-ish score profile:
 - Decision: reverted.
 - Lesson: replacing the dense portfolio with a deterministic fast path overfits local `large_seed301`; official large behavior prefers the original portfolio even when local proxy says otherwise.
 - Status: failed online, code reverted.
-## Active Experiment: Preserve Algorithm, Reduce Runtime Variance
+## Failed Experiment: Preserve Algorithm, Reduce Runtime Variance
 
 - Hypothesis: the stable portfolio is close to the best known line, but online results vary because the time-bound loops stop at different points; safe micro-optimizations may let the same algorithm run more consistently.
 - Local evidence: `cProfile` on true `large_seed301` shows `Candidate.task_set` triggers hundreds of thousands of repeated `sorted(self.tasks)` calls.
-- Planned code change: cache only each candidate's sorted task set and task count during parsing; do not cache penalty fields. Use a `6.55s` complete-pair dense budget, which is long enough to reach the good repair hash but short enough to avoid the later bad dense hashes.
-- Verification: true public `large_seed301` budget sweep showed `6.55-6.9s` reaches hash `95fb008c8f` with local R200 penalty about `695.09`; shorter budgets fall to `06712bdc66`/`2b1a2b6a0e`, and longer budgets can reach the known-bad `72a6c95a74`.
-- Online evidence: the later penalty-cache/dense-cap line was implicated by `large_seed301=743.54`; that does not apply to this lighter task-set-only cache, which preserves the better local dense hash.
-- Decision: restore task-set-only cache as the current candidate; keep penalty-cache and dense-budget cap banned.
-- Lesson: separate performance changes by mechanism. Task-set caching plus a calibrated dense budget helps the deadline-bound dense path reach the historically good repair point; penalty caching and over-short `5.5s` dense cap moved it away.
-- Status: implemented.
+- Planned code change: cache each candidate's sorted task set and task count during parsing, then cache penalty fields and cap complete-pair dense runtime to avoid a previously bad local hash.
+- Verification: unit tests passed locally, but online feedback showed the dense cap/cache line was not safe enough.
+- Online evidence: during the LNS submission, `large_seed301` scored `743.54` even though LNS was skipped for complete-pair dense inputs; this implicates the runtime-cache/dense-budget line rather than LNS. `large_seed302` also remained in the bad `703.32` band.
+- Decision: reverted together with LNS fallout, restoring the known stable baseline behavior.
+- Lesson: even performance-only/cache changes can move deadline-sensitive outputs into worse online bands. Do not submit runtime/cache changes unless the exact online stable hash is preserved or the online score is already confirmed.
+- Status: failed online, code reverted.
 
 ## Failed Experiment: Bounded Matching LNS
 
