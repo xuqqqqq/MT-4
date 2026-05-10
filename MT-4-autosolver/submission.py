@@ -16,28 +16,18 @@ REJECT_PENALTY = 100.0
 
 
 class Candidate(object):
-    __slots__ = (
-        "task_key",
-        "tasks",
-        "task_set",
-        "task_count",
-        "courier_id",
-        "score",
-        "willingness",
-        "penalty",
-        "penalty_per_task",
-    )
+    __slots__ = ("task_key", "tasks", "courier_id", "score", "willingness")
 
     def __init__(self, task_key, tasks, courier_id, score, willingness):
         self.task_key = task_key
         self.tasks = tasks
-        self.task_set = tuple(sorted(tasks))
-        self.task_count = len(tasks)
         self.courier_id = courier_id
         self.score = score
         self.willingness = willingness
-        self.penalty = 0.0
-        self.penalty_per_task = 0.0
+
+    @property
+    def task_set(self):
+        return tuple(sorted(self.tasks))
 
 
 class Instance(object):
@@ -125,7 +115,6 @@ def parse_input(input_text):
 
 
 def portfolio_solve(instance, time_limit_sec):
-    prepare_candidate_penalties(instance)
     deadline = time.perf_counter() + time_limit_sec
     best = {}
     best_obj = evaluate(instance, best)
@@ -138,22 +127,22 @@ def portfolio_solve(instance, time_limit_sec):
             best_obj = obj
     strategies = []
     add_strategy(strategies, lambda c: (c.score, c.task_key, c.courier_id), 1, 0.0, None)
-    add_strategy(strategies, lambda c: (c.score / c.task_count, c.score, c.task_key, c.courier_id), 1, 0.0, None)
-    add_strategy(strategies, lambda c: (-c.task_count, c.score / c.task_count, c.score, c.task_key), 1, 0.0, None)
+    add_strategy(strategies, lambda c: (c.score / len(c.tasks), c.score, c.task_key, c.courier_id), 1, 0.0, None)
+    add_strategy(strategies, lambda c: (-len(c.tasks), c.score / len(c.tasks), c.score, c.task_key), 1, 0.0, None)
     add_strategy(strategies, lambda c: (-c.willingness, c.score, c.task_key, c.courier_id), 1, 0.0, None)
-    add_strategy(strategies, lambda c: (c.penalty_per_task, c.score, c.task_key), 1, 0.0, None)
+    add_strategy(strategies, lambda c: (candidate_penalty(c) / len(c.tasks), c.score, c.task_key), 1, 0.0, None)
 
     for weight in (5.0, 10.0, 15.0, 20.0, 25.0, 35.0, 50.0, 75.0):
         add_strategy(
             strategies,
-            lambda c, w=weight: (c.score - w * c.task_count * c.willingness, c.score, c.task_key),
+            lambda c, w=weight: (c.score - w * len(c.tasks) * c.willingness, c.score, c.task_key),
             1,
             0.0,
             None,
         )
         add_strategy(
             strategies,
-            lambda c, w=weight: ((c.score - w * c.task_count * c.willingness) / c.task_count, c.score, c.task_key),
+            lambda c, w=weight: ((c.score - w * len(c.tasks) * c.willingness) / len(c.tasks), c.score, c.task_key),
             1,
             0.0,
             None,
@@ -161,9 +150,9 @@ def portfolio_solve(instance, time_limit_sec):
 
     base_multi_keys = (
         lambda c: (c.score, c.task_key, c.courier_id),
-        lambda c: (c.penalty_per_task, c.score, c.task_key),
+        lambda c: (candidate_penalty(c) / len(c.tasks), c.score, c.task_key),
         lambda c: (-c.willingness, c.score, c.task_key, c.courier_id),
-        lambda c: (c.score / c.task_count, c.score, c.task_key, c.courier_id),
+        lambda c: (c.score / len(c.tasks), c.score, c.task_key, c.courier_id),
     )
     for key_func in base_multi_keys:
         for max_offers in (2, 3):
@@ -174,17 +163,17 @@ def portfolio_solve(instance, time_limit_sec):
         for max_offers in (2, 3):
             add_strategy(
                 strategies,
-                lambda c, w=weight: (c.score - w * c.task_count * c.willingness, c.score, c.task_key),
+                lambda c, w=weight: (c.score - w * len(c.tasks) * c.willingness, c.score, c.task_key),
                 max_offers,
                 0.01,
                 None,
             )
 
     for margin in (0.0, 5.0, 10.0, 20.0, 35.0):
-        add_strategy(strategies, lambda c: (c.penalty_per_task, c.score, c.task_key), 1, 0.0, margin)
-        add_strategy(strategies, lambda c: (c.penalty_per_task, c.score, c.task_key), 2, 0.01, margin)
-        add_strategy(strategies, lambda c: (c.penalty_per_task, c.score, c.task_key), 3, 0.01, margin)
-        add_strategy(strategies, lambda c: (c.score - 25.0 * c.task_count * c.willingness, c.score, c.task_key), 2, 0.01, margin)
+        add_strategy(strategies, lambda c: (candidate_penalty(c) / len(c.tasks), c.score, c.task_key), 1, 0.0, margin)
+        add_strategy(strategies, lambda c: (candidate_penalty(c) / len(c.tasks), c.score, c.task_key), 2, 0.01, margin)
+        add_strategy(strategies, lambda c: (candidate_penalty(c) / len(c.tasks), c.score, c.task_key), 3, 0.01, margin)
+        add_strategy(strategies, lambda c: (c.score - 25.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 2, 0.01, margin)
 
     for key_func, max_offers, min_gain, margin in strategies:
         if expired(deadline):
@@ -229,15 +218,6 @@ def portfolio_solve(instance, time_limit_sec):
     return normalize_selected(instance, best)
 
 
-def prepare_candidate_penalties(instance):
-    for candidate in instance.candidates:
-        penalty = candidate.willingness * candidate.score + (
-            1.0 - candidate.willingness
-        ) * REJECT_PENALTY * candidate.task_count
-        candidate.penalty = penalty
-        candidate.penalty_per_task = penalty / candidate.task_count
-
-
 def add_strategy(strategies, key_func, max_offers, min_gain, margin):
     strategies.append((key_func, max_offers, min_gain, margin))
 
@@ -249,7 +229,7 @@ def choose_disjoint(instance, ordered_candidates, deadline, margin):
     for candidate in ordered_candidates:
         if expired(deadline):
             break
-        if margin is not None and candidate.penalty >= REJECT_PENALTY * candidate.task_count - margin:
+        if margin is not None and candidate_penalty(candidate) >= REJECT_PENALTY * len(candidate.tasks) - margin:
             continue
         task_set = candidate.task_set
         if candidate.courier_id in used_couriers:
@@ -312,15 +292,15 @@ def expand_multi_offers(instance, selected, max_offers_per_bundle, min_marginal_
 
 
 def pair_only_starts(instance, deadline):
-    pair_candidates = [candidate for candidate in instance.candidates if candidate.task_count > 1]
+    pair_candidates = [candidate for candidate in instance.candidates if len(candidate.tasks) > 1]
     if not pair_candidates:
         return {}
     best = {}
     best_obj = evaluate(instance, best)
     strategies = (
-        (lambda c: (c.penalty_per_task, c.score, -c.willingness, c.task_key), 3, 0.005),
-        (lambda c: (c.score / c.task_count, c.score, -c.willingness, c.task_key), 3, 0.005),
-        (lambda c: (c.score - 35.0 * c.task_count * c.willingness, c.score, c.task_key), 3, 0.01),
+        (lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness, c.task_key), 3, 0.005),
+        (lambda c: (c.score / len(c.tasks), c.score, -c.willingness, c.task_key), 3, 0.005),
+        (lambda c: (c.score - 35.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 3, 0.01),
         (lambda c: (-c.willingness, c.score, c.task_key, c.courier_id), 3, 0.01),
     )
     for key_func, max_offers, min_gain in strategies:
@@ -401,7 +381,7 @@ def option_pool(candidates):
             seen.add(candidate.courier_id)
             pool.append(candidate)
 
-    by_penalty = sorted(candidates, key=lambda c: (c.penalty, c.score, -c.willingness, c.courier_id))
+    by_penalty = sorted(candidates, key=lambda c: (candidate_penalty(c), c.score, -c.willingness, c.courier_id))
     by_score = sorted(candidates, key=lambda c: (c.score, -c.willingness, c.courier_id))
     by_willing = sorted(candidates, key=lambda c: (-c.willingness, c.score, c.courier_id))
     by_ratio = sorted(candidates, key=lambda c: (c.score / max(c.willingness, 1e-9), c.score, c.courier_id))
@@ -509,7 +489,7 @@ def repair_search(instance, seed_selected, deadline):
     best_obj = evaluate(instance, best)
     fill_order = sorted(
         instance.candidates,
-        key=lambda c: (c.penalty_per_task, c.score, -c.willingness, c.task_key, c.courier_id),
+        key=lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness, c.task_key, c.courier_id),
     )
     repair_candidates = limited_repair_candidates(instance)
     checked = 0
@@ -537,7 +517,6 @@ def reject_penalty_probe(instance, seed_selected, deadline, probe_penalties):
             if expired(deadline):
                 break
             REJECT_PENALTY = probe_penalty
-            prepare_candidate_penalties(instance)
             candidate = option_search_solve(instance, deadline)
             if not candidate:
                 candidate = best
@@ -545,14 +524,12 @@ def reject_penalty_probe(instance, seed_selected, deadline, probe_penalties):
                 candidate = repair_search(instance, candidate, deadline)
             candidate = normalize_selected(instance, candidate)
             REJECT_PENALTY = base_penalty
-            prepare_candidate_penalties(instance)
             obj = evaluate(instance, candidate)
             if better(obj, best_obj):
                 best = candidate
                 best_obj = obj
     finally:
         REJECT_PENALTY = base_penalty
-        prepare_candidate_penalties(instance)
     return best
 
 
@@ -562,8 +539,8 @@ def scarce_coverage_repair(instance, seed_selected, deadline):
     fill_order = sorted(
         instance.candidates,
         key=lambda c: (
-            -c.task_count,
-            c.penalty_per_task,
+            -len(c.tasks),
+            candidate_penalty(c) / len(c.tasks),
             c.score,
             -c.willingness,
             c.task_key,
@@ -736,7 +713,7 @@ def scarce_uncovered_candidates(instance, uncovered):
             continue
         ranked.append((
             -overlap,
-            candidate.penalty_per_task,
+            candidate_penalty(candidate) / len(candidate.tasks),
             candidate.score / max(candidate.willingness, 1e-9),
             candidate.score,
             -candidate.willingness,
@@ -758,7 +735,7 @@ def limited_repair_candidates(instance):
             selected.append(candidate)
 
     add_many(
-        sorted(instance.candidates, key=lambda c: (c.penalty_per_task, c.score, -c.willingness)),
+        sorted(instance.candidates, key=lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness)),
         180,
     )
     add_many(
@@ -766,11 +743,11 @@ def limited_repair_candidates(instance):
         120,
     )
     add_many(
-        sorted(instance.candidates, key=lambda c: (-c.task_count, c.penalty_per_task, c.score)),
+        sorted(instance.candidates, key=lambda c: (-len(c.tasks), candidate_penalty(c) / len(c.tasks), c.score)),
         120,
     )
     add_many(
-        sorted(instance.candidates, key=lambda c: (c.score - 50.0 * c.task_count * c.willingness, c.score)),
+        sorted(instance.candidates, key=lambda c: (c.score - 50.0 * len(c.tasks) * c.willingness, c.score)),
         120,
     )
     return selected
@@ -801,7 +778,7 @@ def replace_with_candidate(instance, seed_selected, candidate, fill_order, deadl
     for filler in fill_order:
         if expired(deadline):
             break
-        if filler.penalty >= REJECT_PENALTY * filler.task_count:
+        if candidate_penalty(filler) >= REJECT_PENALTY * len(filler.tasks):
             continue
         task_set = filler.task_set
         if filler.courier_id in used_couriers:
@@ -872,7 +849,7 @@ def is_compact_bundle_instance(instance):
 
 def time_budget_for_instance(instance):
     if is_complete_pair_dense_instance(instance):
-        return 5.5
+        return 6.8
     return 7.9
 
 
@@ -901,10 +878,10 @@ def has_strong_bundle_discount(instance):
     single_scores = []
     bundle_scores = []
     for candidate in instance.candidates:
-        if candidate.task_count == 1:
+        if len(candidate.tasks) == 1:
             single_scores.append(candidate.score)
-        elif candidate.task_count > 1:
-            bundle_scores.append(candidate.score / candidate.task_count)
+        elif len(candidate.tasks) > 1:
+            bundle_scores.append(candidate.score / len(candidate.tasks))
     if not single_scores or not bundle_scores:
         return False
     return median_value(bundle_scores) <= 0.68 * median_value(single_scores)
@@ -994,7 +971,7 @@ def acceptance_probability(probabilities):
 
 
 def candidate_penalty(candidate):
-    task_count = candidate.task_count
+    task_count = len(candidate.tasks)
     return candidate.willingness * candidate.score + (1.0 - candidate.willingness) * REJECT_PENALTY * task_count
 
 

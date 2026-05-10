@@ -117,16 +117,16 @@ Known stable-ish score profile:
 - Decision: reverted.
 - Lesson: replacing the dense portfolio with a deterministic fast path overfits local `large_seed301`; official large behavior prefers the original portfolio even when local proxy says otherwise.
 - Status: failed online, code reverted.
-
-## Active Experiment: Preserve Algorithm, Reduce Runtime Variance
+## Failed Experiment: Preserve Algorithm, Reduce Runtime Variance
 
 - Hypothesis: the stable portfolio is close to the best known line, but online results vary because the time-bound loops stop at different points; safe micro-optimizations may let the same algorithm run more consistently.
 - Local evidence: `cProfile` on true `large_seed301` shows `Candidate.task_set` triggers hundreds of thousands of repeated `sorted(self.tasks)` calls.
-- Planned code change: cache each candidate's sorted task set, task count, and single-offer penalty as direct slot attributes; do not alter strategy order or objective.
-- Verification: unit tests passed; all generated hidden-like cases stayed hash-identical versus `b3a5b64`. True dense `large_seed301` is deliberately capped at `5.5s` so the faster cache avoids the previously failed `72a6c95a74` dense-fast-path output and stays in the older stable hash band.
-- Risk: this is primarily a runtime-stability candidate; it may not materially improve online score, but it should reduce timeout/timing variance without reintroducing a known-bad dense solution.
-- Decision: keep for submission candidate.
-- Status: implemented.
+- Planned code change: cache each candidate's sorted task set and task count during parsing, then cache penalty fields and cap complete-pair dense runtime to avoid a previously bad local hash.
+- Verification: unit tests passed locally, but online feedback showed the dense cap/cache line was not safe enough.
+- Online evidence: during the LNS submission, `large_seed301` scored `743.54` even though LNS was skipped for complete-pair dense inputs; this implicates the runtime-cache/dense-budget line rather than LNS. `large_seed302` also remained in the bad `703.32` band.
+- Decision: reverted together with LNS fallout, restoring the known stable baseline behavior.
+- Lesson: even performance-only/cache changes can move deadline-sensitive outputs into worse online bands. Do not submit runtime/cache changes unless the exact online stable hash is preserved or the online score is already confirmed.
+- Status: failed online, code reverted.
 
 ## Failed Experiment: Bounded Matching LNS
 
