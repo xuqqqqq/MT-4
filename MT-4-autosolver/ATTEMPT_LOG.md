@@ -121,11 +121,11 @@ Known stable-ish score profile:
 
 - Hypothesis: the stable portfolio is close to the best known line, but online results vary because the time-bound loops stop at different points; safe micro-optimizations may let the same algorithm run more consistently.
 - Local evidence: `cProfile` on true `large_seed301` shows `Candidate.task_set` triggers hundreds of thousands of repeated `sorted(self.tasks)` calls.
-- Planned code change: cache each candidate's sorted task set and task count during parsing, then cache penalty fields and cap complete-pair dense runtime to avoid a previously bad local hash.
-- Verification: unit tests passed locally, but online feedback showed the dense cap/cache line was not safe enough.
-- Online evidence: during the LNS submission, `large_seed301` scored `743.54` even though LNS was skipped for complete-pair dense inputs; this implicates the runtime-cache/dense-budget line rather than LNS. `large_seed302` also remained in the bad `703.32` band.
-- Decision: reverted together with LNS fallout, restoring the known stable baseline behavior.
-- Lesson: even performance-only/cache changes can move deadline-sensitive outputs into worse online bands. Do not submit runtime/cache changes unless the exact online stable hash is preserved or the online score is already confirmed.
+- Planned code change: cache each candidate's sorted task set and task count during parsing, then variants tried penalty fields and complete-pair dense budget caps (`5.5s`, later `6.55s`).
+- Verification: unit tests passed locally, but online feedback twice showed the cache/budget line was unsafe despite attractive public-large local hashes.
+- Online evidence: first LNS submission had `high_noise_seed601=error`, `large_seed301=743.54`, `large_seed302=703.32`; then task-set-only cache with `6.55s` dense budget again had `high_noise_seed601=error`, `large_seed301=758.97`, `large_seed302=706.38`.
+- Decision: fully reverted, restoring the known stable baseline behavior.
+- Lesson: even performance-only/cache changes can trigger hidden high-noise failures and move dense large cases into worse online bands. Do not submit runtime/cache/dense-budget changes again from local hash evidence.
 - Status: failed online, code reverted.
 
 ## Failed Experiment: Bounded Matching LNS
