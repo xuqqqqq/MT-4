@@ -127,3 +127,12 @@ Known stable-ish score profile:
 - Risk: this is primarily a runtime-stability candidate; it may not materially improve online score, but it should reduce timeout/timing variance without reintroducing a known-bad dense solution.
 - Decision: keep for submission candidate.
 - Status: implemented.
+
+## Active Experiment: Bounded Matching LNS
+
+- Hypothesis: the stable solver is greedy over task-pair groupings; a small large-neighborhood search that removes one or two weak selected groups and greedily refills from precomputed group options can improve medium/high non-dense cases without touching low/scarce/dense paths.
+- Guardrail: skip complete-pair dense, scarce, low-willingness, and <=15-task cases; cap the polish to about `1.6s` and only run while the existing portfolio still has budget.
+- Local evidence: generated hidden-like gains were concentrated in intended cases: high-noise `297.772 -> 296.592`, medium201 `629.005 -> 626.302`, medium202 `441.996 -> 431.306`, medium203 `532.730 -> 526.818`, generated large302 `604.965 -> 591.714`; true dense `large_seed301`, low, scarce, small, and tiny stayed hash-identical.
+- Risk: local evaluator has been an unreliable online proxy before; this is a real output-changing experiment for non-dense medium/high cases, so it is riskier than the runtime-cache commit.
+- Decision: keep as an experimental candidate only if the next submission is intended to gamble on medium/high improvements.
+- Status: implemented locally after safe rollback commit `79db003`.

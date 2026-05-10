@@ -61,6 +61,19 @@ class GroupOption(object):
         self.savings = REJECT_PENALTY * len(task_set) - penalty
 
 
+class BitOption(object):
+    __slots__ = ("task_set", "task_key", "courier_ids", "penalty", "savings", "task_mask", "courier_mask")
+
+    def __init__(self, option, task_mask, courier_mask):
+        self.task_set = option.task_set
+        self.task_key = option.task_key
+        self.courier_ids = option.courier_ids
+        self.penalty = option.penalty
+        self.savings = option.savings
+        self.task_mask = task_mask
+        self.courier_mask = courier_mask
+
+
 def solve(input_text: str) -> list:
     """Contest entrypoint: return [(task_id_list_str, [courier_id, ...]), ...]."""
 
@@ -204,6 +217,12 @@ def portfolio_solve(instance, time_limit_sec):
             best_obj = obj
     if not expired(deadline):
         selected = option_search_solve(instance, deadline)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
+    if is_matching_polish_instance(instance) and not expired(deadline):
+        selected = matching_lns_polish(instance, best, min(deadline, time.perf_counter() + 1.6))
         obj = evaluate(instance, selected)
         if better(obj, best_obj):
             best = selected
@@ -498,6 +517,129 @@ def option_owners(selected_options):
 
 
 def selected_from_options(options):
+    selected = {}
+    for option in options:
+        selected[option.task_set] = (option.task_key, list(option.courier_ids))
+    return selected
+
+
+def matching_lns_polish(instance, seed_selected, deadline):
+    if expired(deadline):
+        return seed_selected
+    raw_options = build_group_options(instance, deadline)
+    if not raw_options or expired(deadline):
+        return seed_selected
+
+    task_index = {}
+    for index, task_id in enumerate(instance.task_ids):
+        task_index[task_id] = index
+    courier_index = {}
+    for candidate in instance.candidates:
+        if candidate.courier_id not in courier_index:
+            courier_index[candidate.courier_id] = len(courier_index)
+
+    bit_options = []
+    option_lookup = {}
+    for option in raw_options:
+        bit_option = make_bit_option(option, task_index, courier_index)
+        bit_options.append(bit_option)
+        option_lookup[(bit_option.task_set, bit_option.courier_ids)] = bit_option
+
+    current = seed_to_bit_options(instance, seed_selected, option_lookup, task_index, courier_index)
+    if not current:
+        return seed_selected
+    best = list(current)
+    best_selected = selected_from_bit_options(best)
+    best_obj = evaluate(instance, best_selected)
+    orders = (
+        sorted(bit_options, key=lambda opt: (-opt.savings, opt.penalty, len(opt.courier_ids), opt.task_key)),
+        sorted(bit_options, key=lambda opt: (opt.penalty / len(opt.task_set), len(opt.courier_ids), -opt.savings, opt.task_key)),
+        sorted(bit_options, key=lambda opt: (-opt.savings / max(len(opt.courier_ids), 1), opt.penalty, opt.task_key)),
+    )
+
+    while not expired(deadline):
+        changed = False
+        anchors = sorted(current, key=lambda opt: (opt.savings, opt.penalty, opt.task_key))
+        for left in range(len(anchors)):
+            if expired(deadline):
+                break
+            stop = min(len(anchors), left + 8)
+            for right in range(left, stop):
+                if expired(deadline):
+                    break
+                removed = set((id(anchors[left]), id(anchors[right])))
+                base = [option for option in current if id(option) not in removed]
+                for order in orders:
+                    candidate = greedy_fill_bit_options(base, order, deadline)
+                    if expired(deadline):
+                        break
+                    selected = selected_from_bit_options(candidate)
+                    obj = evaluate(instance, selected)
+                    if better(obj, best_obj):
+                        best = candidate
+                        current = candidate
+                        best_selected = selected
+                        best_obj = obj
+                        changed = True
+                        break
+                if changed:
+                    break
+            if changed:
+                break
+        if not changed:
+            break
+    return best_selected
+
+
+def make_bit_option(option, task_index, courier_index):
+    task_mask = 0
+    for task_id in option.task_set:
+        task_mask |= 1 << task_index[task_id]
+    courier_mask = 0
+    for courier_id in option.courier_ids:
+        courier_mask |= 1 << courier_index[courier_id]
+    return BitOption(option, task_mask, courier_mask)
+
+
+def seed_to_bit_options(instance, selected, option_lookup, task_index, courier_index):
+    result = []
+    for task_set, value in selected.items():
+        task_key, courier_ids = value
+        courier_tuple = tuple(courier_ids)
+        option = option_lookup.get((task_set, courier_tuple))
+        if option is not None:
+            result.append(option)
+            continue
+        penalty = reassignment_group_penalty(instance, task_set, task_key, courier_ids)
+        fallback = GroupOption(task_set, task_key, courier_tuple, penalty)
+        result.append(make_bit_option(fallback, task_index, courier_index))
+    return result
+
+
+def greedy_fill_bit_options(base_options, ordered_options, deadline):
+    task_mask = 0
+    courier_mask = 0
+    result = []
+    for option in base_options:
+        if (task_mask & option.task_mask) or (courier_mask & option.courier_mask):
+            continue
+        task_mask |= option.task_mask
+        courier_mask |= option.courier_mask
+        result.append(option)
+    for option in ordered_options:
+        if expired(deadline):
+            break
+        if option.savings <= 1e-9:
+            continue
+        if (task_mask & option.task_mask) or (courier_mask & option.courier_mask):
+            continue
+        task_mask |= option.task_mask
+        courier_mask |= option.courier_mask
+        result.append(option)
+    return result
+
+
+def selected_from_bit_options(options):
     selected = {}
     for option in options:
         selected[option.task_set] = (option.task_key, list(option.courier_ids))
@@ -868,6 +1010,14 @@ def is_compact_bundle_instance(instance):
     if is_low_willingness_instance(instance) or is_scarce_instance(instance) or is_complete_pair_dense_instance(instance):
         return False
     return has_strong_bundle_discount(instance)
+
+
+def is_matching_polish_instance(instance):
+    if len(instance.task_ids) <= 15:
+        return False
+    if is_complete_pair_dense_instance(instance) or is_scarce_instance(instance) or is_low_willingness_instance(instance):
+        return False
+    return True
 
 
 def time_budget_for_instance(instance):
