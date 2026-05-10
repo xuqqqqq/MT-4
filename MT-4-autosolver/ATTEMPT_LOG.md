@@ -127,3 +127,12 @@ Known stable-ish score profile:
 - Risk: this is primarily a runtime-stability candidate; it may not materially improve online score, but it should reduce timeout/timing variance without reintroducing a known-bad dense solution.
 - Decision: keep for submission candidate.
 - Status: implemented.
+
+## Failed Experiment: Bounded Matching LNS
+
+- Hypothesis: medium/high non-dense cases might improve if weak selected task-pair groups were removed and refilled from precomputed group options.
+- Local evidence before submission: generated high-noise/medium/large302 proxy penalties improved while true dense large, low, scarce, small, and tiny stayed hash-identical.
+- Online evidence: average `1000.53`; `high_noise_seed601` returned `error`, `large_seed301` worsened to `743.54`, and `large_seed302` worsened to `703.32`. Medium and low moved only slightly, not enough to offset the failure.
+- Decision: reverted immediately to the safe runtime-cache line.
+- Lesson: output-changing LNS based on local expected penalty is not reliable, and even gated non-dense changes can trigger hidden high-noise legality/runtime failures. Do not reintroduce LNS without first reproducing the high-noise error mechanism locally.
+- Status: failed online, code reverted.
