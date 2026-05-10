@@ -122,8 +122,8 @@ Known stable-ish score profile:
 
 - Hypothesis: the stable portfolio is close to the best known line, but online results vary because the time-bound loops stop at different points; safe micro-optimizations may let the same algorithm run more consistently.
 - Local evidence: `cProfile` on true `large_seed301` shows `Candidate.task_set` triggers hundreds of thousands of repeated `sorted(self.tasks)` calls.
-- Planned code change: cache each candidate's sorted task set and task count during parsing; do not alter strategy order, objective, or solver decisions.
-- Verification: unit tests passed; all generated hidden-like non-dense case hashes stayed identical. True `large_seed301` still follows the original portfolio but can reach one extra repair step locally (`702.354 -> 701.481`) because the same time budget is spent on more search.
-- Risk: true `large_seed301` output remains time-bound and can oscillate between nearby hashes, so this is a runtime-stability candidate rather than a guaranteed score improvement.
+- Planned code change: cache each candidate's sorted task set, task count, and single-offer penalty as direct slot attributes; do not alter strategy order or objective.
+- Verification: unit tests passed; all generated hidden-like cases stayed hash-identical versus `b3a5b64`. True dense `large_seed301` is deliberately capped at `5.5s` so the faster cache avoids the previously failed `72a6c95a74` dense-fast-path output and stays in the older stable hash band.
+- Risk: this is primarily a runtime-stability candidate; it may not materially improve online score, but it should reduce timeout/timing variance without reintroducing a known-bad dense solution.
 - Decision: keep for submission candidate.
 - Status: implemented.
