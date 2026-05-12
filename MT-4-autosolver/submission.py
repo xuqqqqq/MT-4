@@ -197,19 +197,6 @@ def portfolio_solve(instance, time_limit_sec):
         if better(obj, best_obj):
             best = selected
             best_obj = obj
-    if should_pair_swap_repair(instance) and not expired(deadline):
-        selected = pair_swap_repair(instance, best, min(deadline, time.perf_counter() + 0.65))
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
-    if is_low_willingness_instance(instance) and not expired(deadline):
-        selected = expand_multi_offers(instance, best, 3, 0.0, min(deadline, time.perf_counter() + 0.25))
-        selected = normalize_selected(instance, selected)
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
     if is_scarce_instance(instance) and not expired(deadline):
         selected = scarce_coverage_repair(instance, best, deadline)
         obj = evaluate(instance, selected)
@@ -477,109 +464,6 @@ def improve_options(selected_options, all_options, deadline):
         if not changed:
             break
     return selected
-
-
-def pair_swap_repair(instance, seed_selected, deadline):
-    selected = normalize_selected(instance, seed_selected)
-    if not selected:
-        return selected
-    best_obj = evaluate(instance, selected)
-    all_couriers = set()
-    for candidate in instance.candidates:
-        all_couriers.add(candidate.courier_id)
-
-    passes = 0
-    while passes < 8 and not expired(deadline):
-        passes += 1
-        improved = False
-        groups = list(selected.keys())
-        used_all = set()
-        for _, couriers in selected.values():
-            used_all.update(couriers)
-
-        for left_index in range(len(groups)):
-            if expired(deadline) or improved:
-                break
-            left = groups[left_index]
-            if len(left) != 2:
-                continue
-            for right_index in range(left_index + 1, len(groups)):
-                if expired(deadline):
-                    break
-                right = groups[right_index]
-                if len(right) != 2:
-                    continue
-
-                allowed = set(all_couriers)
-                for courier_id in used_all:
-                    allowed.discard(courier_id)
-                for courier_id in selected[left][1]:
-                    allowed.add(courier_id)
-                for courier_id in selected[right][1]:
-                    allowed.add(courier_id)
-
-                tasks = list(left + right)
-                pairings = (
-                    (tuple(sorted((tasks[0], tasks[2]))), tuple(sorted((tasks[1], tasks[3])))),
-                    (tuple(sorted((tasks[0], tasks[3]))), tuple(sorted((tasks[1], tasks[2])))),
-                    (left, right),
-                )
-                for first_pair, second_pair in pairings:
-                    first_option = best_allowed_group_option(instance, first_pair, allowed)
-                    if first_option is None:
-                        continue
-                    remaining = set(allowed)
-                    for courier_id in first_option.courier_ids:
-                        remaining.discard(courier_id)
-                    second_option = best_allowed_group_option(instance, second_pair, remaining)
-                    if second_option is None:
-                        continue
-
-                    trial = dict(selected)
-                    if left in trial:
-                        del trial[left]
-                    if right in trial:
-                        del trial[right]
-                    trial[first_option.task_set] = (first_option.task_key, list(first_option.courier_ids))
-                    trial[second_option.task_set] = (second_option.task_key, list(second_option.courier_ids))
-                    trial = normalize_selected(instance, trial)
-                    obj = evaluate(instance, trial)
-                    if better(obj, best_obj):
-                        selected = trial
-                        best_obj = obj
-                        improved = True
-                        break
-                if improved:
-                    break
-        if not improved:
-            break
-    return selected
-
-
-def best_allowed_group_option(instance, task_set, allowed_couriers):
-    candidates = []
-    for candidate in instance.by_task_set.get(task_set, ()):
-        if candidate.courier_id in allowed_couriers:
-            candidates.append(candidate)
-    if not candidates:
-        return None
-
-    best = None
-    max_size = min(3, len(candidates))
-    for size in range(1, max_size + 1):
-        for combo in itertools.combinations(candidates, size):
-            ordered = tuple(sorted(combo, key=lambda item: (item.score, -item.willingness, item.courier_id)))
-            penalty = group_expected_penalty(task_set, ordered)
-            option = GroupOption(task_set, ordered[0].task_key, tuple(item.courier_id for item in ordered), penalty)
-            if best is None or option.penalty < best.penalty:
-                best = option
-    return best
-
-
-def should_pair_swap_repair(instance):
-    if is_scarce_instance(instance) or is_complete_pair_dense_instance(instance):
-        return False
-    return len(instance.task_ids) >= 25
 
 
 def option_owners(selected_options):

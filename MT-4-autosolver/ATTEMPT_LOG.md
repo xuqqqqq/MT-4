@@ -147,9 +147,12 @@ Known stable-ish score profile:
 - Lesson: even a post-dense, strict-scarce branch can perturb large online behavior without helping scarce. Do not add scarce beam code to the submitted file unless it replaces a proven scarce output with online evidence.
 - Status: failed online, code reverted.
 
-## Active Experiment: Pair-Swap Repair Revival
+## Failed Experiment: Pair-Swap Repair Revival
 
-- Hypothesis: the earlier bounded two-pair repair is a better next candidate than new scarce/low branches because it preserves the `<=3` offer cap, skips scarce and complete-pair dense cases, and locally improves high-noise/medium/low-like cases without changing the selected dense public-large path.
-- Code change: revive commit `c4265ca` on top of the restored stable line: add `pair_swap_repair()` for non-scarce, non-complete-dense instances plus a capped low-willingness `expand_multi_offers(..., max=3)` tail.
-- Local evidence: unit tests passed; generated hidden-like suite improved high-noise, both generated large variants, low-willingness, and all three medium cases while scarce/small/tiny stayed unchanged; official `large_seed301` is `complete_pair_dense=True`, `should_pair_swap_repair=False`, and repeated `solve()` runs returned the stable `695.089` proxy band.
-- Risk: previous non-dense LNS-like edits have caused hidden high-noise failures, so this must be judged as a single online ablation and reverted immediately if high-noise errors or large bad bands return.
+- Hypothesis: bounded two-pair repair from commit `c4265ca` might improve non-dense medium/high-noise/low-like cases while skipping scarce and complete-pair dense cases.
+- Code change: revived `pair_swap_repair()` for non-scarce, non-complete-dense instances plus a capped low-willingness `expand_multi_offers(..., max=3)` tail.
+- Local evidence: unit tests passed; generated hidden-like suite improved high-noise, both generated large variants, low-willingness, and all three medium cases while scarce/small/tiny stayed unchanged.
+- Online evidence: average `759.87`; high-noise, low-willingness, scarce, small, and tiny were unchanged, while `large_seed301` regressed to `750.36`, `large_seed302` to `703.32`, and medium cases also worsened versus the best stable family.
+- Decision: reverted.
+- Lesson: pair-swap/fixed-partition repair is another local-proxy trap. Do not revive `c4265ca` or similar non-dense pair-repair code unless the hidden large/high-noise bad-band mechanism is reproduced locally.
+- Status: failed online, code reverted.
