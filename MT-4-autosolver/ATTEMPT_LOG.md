@@ -136,3 +136,11 @@ Known stable-ish score profile:
 - Decision: reverted immediately to the safe runtime-cache line.
 - Lesson: output-changing LNS based on local expected penalty is not reliable, and even gated non-dense changes can trigger hidden high-noise legality/runtime failures. Do not reintroduce LNS without first reproducing the high-noise error mechanism locally.
 - Status: failed online, code reverted.
+
+## Active Experiment: Scarce-Only Coverage Beam
+
+- Hypothesis: `scarce_couriers_seed401` is the most deterministic remaining weak case because the stable line often leaves `38/40` tasks covered online; a strict scarce-only beam can find alternative pair covers without touching dense large/high-noise/medium paths.
+- Code change: keep the stable portfolio first, then spend a small extra scarce-only budget on a bitmask beam over pair/single bundles; low-willingness fanout code is present behind a disabled switch for later online ablation.
+- Guardrail: no cache fields, no dense-budget edits, no broad post-portfolio polish; non-strict-scarce cases must not enter the new beam.
+- Planned local evidence: generated scarce legality/runtime, true `large_seed301` classifier remains false for scarce special, full unit suite and Python compile.
+- Local evidence: `python -m py_compile submission.py`; `python -m unittest discover -s tests -q` passed 23 tests. Generated hidden-like cases only flagged `scarce_couriers_seed401` as scarce-special and `low_willingness_seed501` as low-special; low-special remains disabled. True official `large_seed301` stayed `scarce_special=False`, `low_special=False`, `dense=True` and repeated local runs stayed in the known stable proxy band (`694.855`-`695.089` after moving dense tail ahead of new special checks).

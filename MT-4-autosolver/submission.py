@@ -13,6 +13,8 @@ import math
 import time
 
 REJECT_PENALTY = 100.0
+ENABLE_SCARCE_SPECIAL = True
+ENABLE_LOW_WILLINGNESS_SPECIAL = False
 
 
 class Candidate(object):
@@ -211,6 +213,18 @@ def portfolio_solve(instance, time_limit_sec):
             best_obj = obj
     if is_complete_pair_dense_instance(instance):
         selected = scarce_courier_reassignment(instance, best, time.perf_counter() + 0.45)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
+    if ENABLE_SCARCE_SPECIAL and is_scarce_special_instance(instance) and not expired(deadline):
+        selected = scarce_pair_beam_search(instance, best, deadline)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
+    if ENABLE_LOW_WILLINGNESS_SPECIAL and is_low_willingness_special_instance(instance) and not expired(deadline):
+        selected = low_willingness_global_fanout(instance, best, deadline)
         obj = evaluate(instance, selected)
         if better(obj, best_obj):
             best = selected
@@ -572,6 +586,237 @@ def scarce_coverage_repair(instance, seed_selected, deadline):
     return best
 
 
+def scarce_pair_beam_search(instance, seed_selected, deadline):
+    best = normalize_selected(instance, seed_selected)
+    best_obj = evaluate(instance, best)
+    remaining = deadline - time.perf_counter()
+    if remaining <= 0.15:
+        return best
+
+    task_index = {}
+    for index, task_id in enumerate(instance.task_ids):
+        task_index[task_id] = index
+    courier_ids = sorted(set(candidate.courier_id for candidate in instance.candidates))
+    courier_index = {}
+    for index, courier_id in enumerate(courier_ids):
+        courier_index[courier_id] = index
+
+    all_options = []
+    options_by_task = [[] for _ in instance.task_ids]
+    top_per_set = 5
+    per_task_limit = 28
+    beam_width = 420
+    if remaining > 1.3:
+        beam_width = 700
+        per_task_limit = 34
+
+    for task_set, candidates in instance.by_task_set.items():
+        if expired(deadline):
+            break
+        if len(task_set) > 2:
+            continue
+        task_mask = 0
+        missing_task = False
+        for task_id in task_set:
+            index = task_index.get(task_id)
+            if index is None:
+                missing_task = True
+                break
+            task_mask |= 1 << index
+        if missing_task:
+            continue
+        limit = top_per_set
+        if len(task_set) == 1:
+            limit = 3
+        ranked = sorted(
+            candidates,
+            key=lambda c: (
+                candidate_penalty(c) / len(c.tasks),
+                c.score,
+                -c.willingness,
+                c.task_key,
+                c.courier_id,
+            ),
+        )[:limit]
+        for candidate in ranked:
+            courier_pos = courier_index.get(candidate.courier_id)
+            if courier_pos is None:
+                continue
+            penalty = group_expected_penalty(task_set, (candidate,))
+            option_id = len(all_options)
+            all_options.append(
+                (
+                    task_mask,
+                    task_set,
+                    candidate.task_key,
+                    1 << courier_pos,
+                    candidate.courier_id,
+                    penalty,
+                    candidate.score,
+                    -candidate.willingness,
+                )
+            )
+            for task_id in task_set:
+                options_by_task[task_index[task_id]].append(option_id)
+
+    for index in range(len(options_by_task)):
+        options_by_task[index].sort(key=lambda option_id: scarce_option_order_key(all_options[option_id]))
+        if len(options_by_task[index]) > per_task_limit:
+            options_by_task[index] = options_by_task[index][:per_task_limit]
+
+    states = [(0.0, 0, 0, ())]
+    task_count = len(instance.task_ids)
+    for task_pos in range(task_count):
+        if expired(deadline):
+            break
+        task_bit = 1 << task_pos
+        next_states = {}
+
+        for penalty_so_far, covered_mask, courier_mask, selected_ids in states:
+            keep_state(next_states, penalty_so_far, covered_mask, courier_mask, selected_ids)
+            if covered_mask & task_bit:
+                continue
+            for option_id in options_by_task[task_pos]:
+                option = all_options[option_id]
+                task_mask, _, _, option_courier_mask, _, option_penalty, _, _ = option
+                if covered_mask & task_mask:
+                    continue
+                if courier_mask & option_courier_mask:
+                    continue
+                keep_state(
+                    next_states,
+                    penalty_so_far + option_penalty,
+                    covered_mask | task_mask,
+                    courier_mask | option_courier_mask,
+                    selected_ids + (option_id,),
+                )
+
+        ranked_states = []
+        for key, value in next_states.items():
+            covered_mask, courier_mask = key
+            penalty_so_far, selected_ids = value
+            covered = popcount_int(covered_mask)
+            ranked_states.append(
+                (
+                    -covered,
+                    penalty_so_far + REJECT_PENALTY * (task_count - covered),
+                    popcount_int(courier_mask),
+                    penalty_so_far,
+                    covered_mask,
+                    courier_mask,
+                    selected_ids,
+                )
+            )
+        ranked_states.sort()
+        states = [
+            (item[3], item[4], item[5], item[6])
+            for item in ranked_states[:beam_width]
+        ]
+
+    evaluated = 0
+    for _, _, _, selected_ids in states[:min(len(states), 100)]:
+        if expired(deadline):
+            break
+        selected = {}
+        for option_id in selected_ids:
+            _, task_set, task_key, _, courier_id, _, _, _ = all_options[option_id]
+            selected[task_set] = (task_key, [courier_id])
+        selected = expand_multi_offers(instance, selected, 3, 0.001, deadline)
+        selected = normalize_selected(instance, selected)
+        obj = evaluate(instance, selected)
+        evaluated += 1
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
+        if evaluated >= 100:
+            break
+    return best
+
+
+def scarce_option_order_key(option):
+    task_mask, _, task_key, _, courier_id, penalty, score, negative_willingness = option
+    size = max(popcount_int(task_mask), 1)
+    return (penalty / size, score, negative_willingness, task_key, courier_id)
+
+
+def keep_state(states, penalty, covered_mask, courier_mask, selected_ids):
+    key = (covered_mask, courier_mask)
+    old = states.get(key)
+    if old is None or penalty < old[0]:
+        states[key] = (penalty, selected_ids)
+
+
+def low_willingness_global_fanout(instance, seed_selected, deadline):
+    best = normalize_selected(instance, seed_selected)
+    best_obj = evaluate(instance, best)
+    for max_offers in (5, 6, 8):
+        if expired(deadline):
+            break
+        selected = expand_low_willingness_offers(instance, best, max_offers, deadline)
+        selected = normalize_selected(instance, selected)
+        obj = evaluate(instance, selected)
+        if better(obj, best_obj):
+            best = selected
+            best_obj = obj
+    return best
+
+
+def expand_low_willingness_offers(instance, seed_selected, max_offers_per_bundle, deadline):
+    selected = {}
+    for task_set, value in seed_selected.items():
+        task_key, couriers = value
+        selected[task_set] = (task_key, list(couriers))
+
+    used_couriers = set()
+    for _, couriers in selected.values():
+        used_couriers.update(couriers)
+
+    miss_probability = {}
+    for task_set, value in selected.items():
+        task_key, couriers = value
+        miss = 1.0
+        for courier_id in couriers:
+            candidate = instance.by_offer.get((task_key, courier_id))
+            if candidate is not None:
+                miss *= 1.0 - candidate.willingness
+        miss_probability[task_set] = miss
+
+    ranked = []
+    for task_set, value in selected.items():
+        task_key, couriers = value
+        if len(couriers) >= max_offers_per_bundle:
+            continue
+        for candidate in instance.by_task_set.get(task_set, ()):
+            if candidate.courier_id in couriers:
+                continue
+            raw_gain = REJECT_PENALTY * len(task_set) - candidate.score
+            if raw_gain <= 0.0:
+                continue
+            gain = miss_probability[task_set] * candidate.willingness * raw_gain
+            if gain > 0.001:
+                ranked.append((-gain / max(candidate.score, 1e-9), -gain, candidate.score, candidate))
+
+    for _, _, _, candidate in sorted(ranked):
+        if expired(deadline):
+            break
+        task_set = candidate.task_set
+        task_key, couriers = selected.get(task_set, (candidate.task_key, []))
+        if len(couriers) >= max_offers_per_bundle:
+            continue
+        if candidate.courier_id in used_couriers:
+            continue
+        gain = miss_probability.get(task_set, 1.0) * candidate.willingness * (
+            REJECT_PENALTY * len(task_set) - candidate.score
+        )
+        if gain <= 0.001:
+            continue
+        couriers.append(candidate.courier_id)
+        selected[task_set] = (task_key, couriers)
+        used_couriers.add(candidate.courier_id)
+        miss_probability[task_set] = miss_probability.get(task_set, 1.0) * (1.0 - candidate.willingness)
+    return selected
+
+
 def scarce_courier_reassignment(instance, seed_selected, deadline):
     selected = normalize_selected(instance, seed_selected)
     if not selected:
@@ -828,6 +1073,20 @@ def is_scarce_instance(instance):
     return courier_count(instance) <= task_count * 1.15
 
 
+def is_scarce_special_instance(instance):
+    task_count = len(instance.task_ids)
+    if task_count < 35:
+        return False
+    if courier_count(instance) > task_count * 1.15:
+        return False
+    pair_count = 0
+    for task_set in instance.by_task_set:
+        if len(task_set) == 2:
+            pair_count += 1
+    expected_pairs = task_count * (task_count - 1) // 2
+    return pair_count >= expected_pairs * 0.90
+
+
 def is_low_willingness_instance(instance):
     if not instance.task_ids:
         return False
@@ -837,6 +1096,18 @@ def is_low_willingness_instance(instance):
         return False
     values = [candidate.willingness for candidate in instance.candidates]
     return median_value(values) < 0.18
+
+
+def is_low_willingness_special_instance(instance):
+    task_count = len(instance.task_ids)
+    if task_count < 20 or task_count > 35:
+        return False
+    if is_scarce_instance(instance) or is_complete_pair_dense_instance(instance):
+        return False
+    if courier_count(instance) < task_count * 2.0:
+        return False
+    values = [candidate.willingness for candidate in instance.candidates]
+    return median_value(values) <= 0.12 and percentile_value(values, 0.90) <= 0.35
 
 
 def is_compact_bundle_instance(instance):
@@ -850,6 +1121,8 @@ def is_compact_bundle_instance(instance):
 def time_budget_for_instance(instance):
     if is_complete_pair_dense_instance(instance):
         return 6.8
+    if ENABLE_SCARCE_SPECIAL and is_scarce_special_instance(instance):
+        return 8.8
     return 7.9
 
 
@@ -895,6 +1168,26 @@ def median_value(values):
     if len(ordered) % 2:
         return ordered[middle]
     return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def percentile_value(values, percentile):
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = int((len(ordered) - 1) * percentile)
+    if index < 0:
+        index = 0
+    elif index >= len(ordered):
+        index = len(ordered) - 1
+    return ordered[index]
+
+
+def popcount_int(value):
+    count = 0
+    while value:
+        value &= value - 1
+        count += 1
+    return count
 
 
 def evaluate(instance, selected):
