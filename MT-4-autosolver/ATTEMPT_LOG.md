@@ -157,10 +157,13 @@ Known stable-ish score profile:
 - Lesson: pair-swap/fixed-partition repair is another local-proxy trap. Do not revive `c4265ca` or similar non-dense pair-repair code unless the hidden large/high-noise bad-band mechanism is reproduced locally.
 - Status: failed online, code reverted.
 
-## Active Experiment: Dense Budget Stabilization
+## Failed Experiment: Dense Budget Stabilization
 
 - Hypothesis: complete-pair dense cases are not helped by extra late repair time; local public `large_seed301` falls into the stable `695.089` band at a `6.0s` dense budget, while later time slices can change output and online submissions often fall into bad large bands after code-shape changes.
 - Code change: reduce `time_budget_for_instance()` for `is_complete_pair_dense_instance(instance)` from `6.8` to `6.0`, leaving all non-dense cases unchanged.
 - Local evidence: true public `large_seed301` budget sweep showed `6.0` and `6.4` consistently return `695.089`; `5.2/5.6` return `701.481`; `7.2+` return `696.244`.
 - Verification: compile and unit tests passed; true public `large_seed301` repeated smoke returned the same `695.089` output hash on all 4 runs; generated hidden-like cases did not trigger the dense classifier.
-- Guardrail: one-line change only; no new branch, cache, LNS, fanout, or hardcoded teacher output.
+- Online evidence: average `761.64`; `large_seed301` worsened to `768.08`, `large_seed302` stayed in the bad `703.32` band, and no other case improved.
+- Decision: reverted.
+- Lesson: public large local hashes and budget sweeps are not predictive enough for online dense cases. Do not tune dense time budget again without a new scoring/legality insight.
+- Status: failed online, code reverted.
