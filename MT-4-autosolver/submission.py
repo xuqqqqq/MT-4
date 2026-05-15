@@ -1,979 +1,1135 @@
-"""Single-file submission for the AutoSolver challenge.
+"""
+AutoSolver for the courier-task assignment problem.
 
-This file is written for old Python 3 runtimes, including Python 3.5/3.6:
-no dataclasses, no f-strings, no external packages, and no network calls.
-
-The judge should call:
-
+Required public API:
     solve(input_text: str) -> list
+
+Return format:
+    [(task_id_list_str, [courier_id, ...]), ...]
+
+The solver is dependency-free and compatible with Python 3.6.
 """
 
-import itertools
-import math
+import heapq
+import random
 import time
+from collections import defaultdict
 
-REJECT_PENALTY = 100.0
+
+# The official statement emphasizes covering accepted orders first and then
+# minimizing total_score.  Willingness is used as a light tie-break / strategy
+# signal so the solver can explore risk-aware variants without letting noisy
+# probability estimates dominate the explicit score objective.
+WILLINGNESS_VALUE = 0.0
+DEFAULT_TIME_LIMIT = 5.50
+LOCAL_SEARCH_TIME_FRACTION = 0.35
+FAIL_PENALTY = 100.0
 
 
 class Candidate(object):
-    __slots__ = ("task_key", "tasks", "courier_id", "score", "willingness")
+    __slots__ = ("mask", "task_str", "courier", "score", "p", "task_count")
 
-    def __init__(self, task_key, tasks, courier_id, score, willingness):
-        self.task_key = task_key
-        self.tasks = tasks
-        self.courier_id = courier_id
+    def __init__(self, mask, task_str, courier, score, p, task_count):
+        self.mask = mask
+        self.task_str = task_str
+        self.courier = courier
         self.score = score
-        self.willingness = willingness
-
-    @property
-    def task_set(self):
-        return tuple(sorted(self.tasks))
+        self.p = p
+        self.task_count = task_count
 
 
-class Instance(object):
-    __slots__ = ("candidates", "task_ids", "by_offer", "by_task_set")
+class ParsedProblem(object):
+    __slots__ = (
+        "task_to_idx",
+        "idx_to_task",
+        "by_mask",
+        "all_couriers",
+        "single_masks",
+        "pair_masks",
+        "all_task_mask",
+        "n_tasks",
+        "candidate_count",
+    )
 
-    def __init__(self, candidates, task_ids, by_offer, by_task_set):
-        self.candidates = candidates
-        self.task_ids = task_ids
-        self.by_offer = by_offer
-        self.by_task_set = by_task_set
-
-
-class GroupOption(object):
-    __slots__ = ("task_set", "task_key", "courier_ids", "penalty", "savings")
-
-    def __init__(self, task_set, task_key, courier_ids, penalty):
-        self.task_set = task_set
-        self.task_key = task_key
-        self.courier_ids = courier_ids
-        self.penalty = penalty
-        self.savings = REJECT_PENALTY * len(task_set) - penalty
-
-
-def solve(input_text: str) -> list:
-    """Contest entrypoint: return [(task_id_list_str, [courier_id, ...]), ...]."""
-
-    global REJECT_PENALTY
-    instance = parse_input(input_text)
-    REJECT_PENALTY = configured_reject_penalty(instance)
-    selected = portfolio_solve(instance, time_budget_for_instance(instance))
-    return assignment_to_result(selected)
+    def __init__(self):
+        self.task_to_idx = {}
+        self.idx_to_task = []
+        self.by_mask = defaultdict(list)
+        self.all_couriers = []
+        self.single_masks = []
+        self.pair_masks = []
+        self.all_task_mask = 0
+        self.n_tasks = 0
+        self.candidate_count = 0
 
 
-def configured_reject_penalty(instance):
-    if is_scarce_instance(instance):
-        return 90.0
-    if is_complete_pair_dense_instance(instance):
-        return 200.0
-    return 100.0
+def _bit_count(x):
+    # int.bit_count is not available in Python 3.6.
+    return bin(x).count("1")
 
 
-def parse_input(input_text):
-    candidates = []
-    lines = input_text.splitlines()
-    start = 0
-    if lines and lines[0].lstrip("\ufeff").startswith("task_id_list"):
-        start = 1
+def _bits(mask):
+    out = []
+    idx = 0
+    while mask:
+        if mask & 1:
+            out.append(idx)
+        mask >>= 1
+        idx += 1
+    return out
+
+
+def _parse_input(input_text):
+    problem = ParsedProblem()
+    if not input_text:
+        return problem
+
+    lines = input_text.strip().splitlines()
+    if not lines:
+        return problem
+
+    start = 1 if lines[0].strip().startswith("task_id_list") else 0
+    best_by_key = {}
+    courier_seen = set()
 
     for line in lines[start:]:
-        if not line.strip():
+        line = line.strip()
+        if not line:
             continue
-        parts = line.rstrip("\n").split("\t")
+        parts = line.split("\t")
         if len(parts) < 4:
             continue
-        task_key = ",".join([part.strip() for part in parts[0].strip().split(",") if part.strip()])
-        if not task_key:
-            continue
+
+        task_str = parts[0].strip()
+        courier = parts[1].strip()
         try:
             score = float(parts[2])
             willingness = float(parts[3])
         except ValueError:
             continue
-        if not math.isfinite(score) or not math.isfinite(willingness):
+
+        tasks = [x.strip() for x in task_str.split(",") if x.strip()]
+        if not tasks or not courier:
             continue
-        if willingness < 0.0:
-            willingness = 0.0
-        elif willingness > 1.0:
-            willingness = 1.0
-        candidates.append(Candidate(task_key, tuple(task_key.split(",")), parts[1].strip(), score, willingness))
 
-    by_offer = {}
-    grouped = {}
-    task_set_all = set()
-    for candidate in candidates:
-        by_offer[(candidate.task_key, candidate.courier_id)] = candidate
-        grouped.setdefault(candidate.task_set, []).append(candidate)
-        for task_id in candidate.tasks:
-            task_set_all.add(task_id)
+        mask = 0
+        for task in tasks:
+            if task not in problem.task_to_idx:
+                problem.task_to_idx[task] = len(problem.idx_to_task)
+                problem.idx_to_task.append(task)
+            mask |= 1 << problem.task_to_idx[task]
 
-    by_task_set = {}
-    for key, value in grouped.items():
-        by_task_set[key] = tuple(value)
+        task_count = _bit_count(mask)
+        if task_count <= 0:
+            continue
 
-    return Instance(tuple(candidates), tuple(sorted(task_set_all)), by_offer, by_task_set)
+        if courier not in courier_seen:
+            courier_seen.add(courier)
+            problem.all_couriers.append(courier)
+
+        cand = Candidate(mask, task_str, courier, score, willingness, task_count)
+        key = (mask, courier)
+        old = best_by_key.get(key)
+        if old is None or score < old.score or (
+            score == old.score and willingness > old.p
+        ):
+            best_by_key[key] = cand
+
+    for cand in best_by_key.values():
+        problem.by_mask[cand.mask].append(cand)
+        problem.all_task_mask |= cand.mask
+
+    for mask in problem.by_mask:
+        count = _bit_count(mask)
+        if count == 1:
+            problem.single_masks.append(mask)
+        elif count == 2:
+            problem.pair_masks.append(mask)
+
+    problem.n_tasks = len(problem.idx_to_task)
+    problem.all_couriers.sort()
+    for mask in problem.by_mask:
+        problem.by_mask[mask].sort(key=lambda c: (c.score, -c.p, c.courier))
+        problem.candidate_count += len(problem.by_mask[mask])
+
+    return problem
 
 
-def portfolio_solve(instance, time_limit_sec):
-    deadline = time.perf_counter() + time_limit_sec
+def _time_budget(problem):
+    """Keep the public judge happy: small cases should return almost at once."""
+    candidates = problem.candidate_count
+    tasks = problem.n_tasks
+    if tasks <= 8 or candidates <= 300:
+        return 0.12
+    if tasks <= 20 or candidates <= 2000:
+        return 0.25
+    if candidates <= 8000:
+        return 0.45
+    if candidates <= 20000:
+        return 0.80
+    return DEFAULT_TIME_LIMIT
+
+
+def _candidate_metric(cand, alpha):
+    # alpha > 0 favors high willingness, alpha < 0 intentionally explores
+    # score-first low-risk alternatives.
+    return cand.score - alpha * cand.p * cand.task_count
+
+
+def _best_metric_by_mask(problem, alpha):
     best = {}
-    best_obj = evaluate(instance, best)
-
-    if is_scarce_instance(instance) or has_strong_bundle_discount(instance):
-        selected = pair_only_starts(instance, deadline)
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
-    strategies = []
-    add_strategy(strategies, lambda c: (c.score, c.task_key, c.courier_id), 1, 0.0, None)
-    add_strategy(strategies, lambda c: (c.score / len(c.tasks), c.score, c.task_key, c.courier_id), 1, 0.0, None)
-    add_strategy(strategies, lambda c: (-len(c.tasks), c.score / len(c.tasks), c.score, c.task_key), 1, 0.0, None)
-    add_strategy(strategies, lambda c: (-c.willingness, c.score, c.task_key, c.courier_id), 1, 0.0, None)
-    add_strategy(strategies, lambda c: (candidate_penalty(c) / len(c.tasks), c.score, c.task_key), 1, 0.0, None)
-
-    for weight in (5.0, 10.0, 15.0, 20.0, 25.0, 35.0, 50.0, 75.0):
-        add_strategy(
-            strategies,
-            lambda c, w=weight: (c.score - w * len(c.tasks) * c.willingness, c.score, c.task_key),
-            1,
-            0.0,
-            None,
-        )
-        add_strategy(
-            strategies,
-            lambda c, w=weight: ((c.score - w * len(c.tasks) * c.willingness) / len(c.tasks), c.score, c.task_key),
-            1,
-            0.0,
-            None,
-        )
-
-    base_multi_keys = (
-        lambda c: (c.score, c.task_key, c.courier_id),
-        lambda c: (candidate_penalty(c) / len(c.tasks), c.score, c.task_key),
-        lambda c: (-c.willingness, c.score, c.task_key, c.courier_id),
-        lambda c: (c.score / len(c.tasks), c.score, c.task_key, c.courier_id),
-    )
-    for key_func in base_multi_keys:
-        for max_offers in (2, 3):
-            for min_gain in (0.005, 0.01, 0.02, 0.05):
-                add_strategy(strategies, key_func, max_offers, min_gain, None)
-
-    for weight in (15.0, 25.0, 35.0, 50.0):
-        for max_offers in (2, 3):
-            add_strategy(
-                strategies,
-                lambda c, w=weight: (c.score - w * len(c.tasks) * c.willingness, c.score, c.task_key),
-                max_offers,
-                0.01,
-                None,
-            )
-
-    for margin in (0.0, 5.0, 10.0, 20.0, 35.0):
-        add_strategy(strategies, lambda c: (candidate_penalty(c) / len(c.tasks), c.score, c.task_key), 1, 0.0, margin)
-        add_strategy(strategies, lambda c: (candidate_penalty(c) / len(c.tasks), c.score, c.task_key), 2, 0.01, margin)
-        add_strategy(strategies, lambda c: (candidate_penalty(c) / len(c.tasks), c.score, c.task_key), 3, 0.01, margin)
-        add_strategy(strategies, lambda c: (c.score - 25.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 2, 0.01, margin)
-
-    for key_func, max_offers, min_gain, margin in strategies:
-        if expired(deadline):
-            break
-        selected = choose_disjoint(instance, sorted(instance.candidates, key=key_func), deadline, margin)
-        if max_offers > 1:
-            selected = expand_multi_offers(instance, selected, max_offers, min_gain, deadline)
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
-    if not expired(deadline):
-        selected = repair_search(instance, best, deadline)
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
-    if not expired(deadline):
-        selected = option_search_solve(instance, deadline)
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
-    if is_scarce_instance(instance) and not expired(deadline):
-        selected = scarce_coverage_repair(instance, best, deadline)
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
-    if is_scarce_instance(instance) and not expired(deadline):
-        selected = scarce_courier_reassignment(instance, best, deadline)
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
-    if is_complete_pair_dense_instance(instance):
-        selected = scarce_courier_reassignment(instance, best, time.perf_counter() + 0.45)
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
-    return normalize_selected(instance, best)
-
-
-def add_strategy(strategies, key_func, max_offers, min_gain, margin):
-    strategies.append((key_func, max_offers, min_gain, margin))
-
-
-def choose_disjoint(instance, ordered_candidates, deadline, margin):
-    selected = {}
-    covered_tasks = set()
-    used_couriers = set()
-    for candidate in ordered_candidates:
-        if expired(deadline):
-            break
-        if margin is not None and candidate_penalty(candidate) >= REJECT_PENALTY * len(candidate.tasks) - margin:
-            continue
-        task_set = candidate.task_set
-        if candidate.courier_id in used_couriers:
-            continue
-        if any(task_id in covered_tasks for task_id in task_set):
-            continue
-        selected[task_set] = (candidate.task_key, [candidate.courier_id])
-        covered_tasks.update(task_set)
-        used_couriers.add(candidate.courier_id)
-        if len(covered_tasks) == len(instance.task_ids):
-            break
-    return selected
-
-
-def expand_multi_offers(instance, selected, max_offers_per_bundle, min_marginal_gain, deadline):
-    expanded = {}
-    for task_set, value in selected.items():
-        expanded[task_set] = (value[0], list(value[1]))
-
-    used_couriers = set()
-    for _, couriers in expanded.values():
-        used_couriers.update(couriers)
-
-    miss_probability = {}
-    for task_set, value in expanded.items():
-        task_key, couriers = value
-        probabilities = []
-        for courier_id in couriers:
-            candidate = instance.by_offer.get((task_key, courier_id))
-            if candidate is not None:
-                probabilities.append(candidate.willingness)
-        miss_probability[task_set] = 1.0 - acceptance_probability(probabilities)
-
-    ranked = []
-    for task_set, value in expanded.items():
-        _, couriers = value
-        for candidate in instance.by_task_set.get(task_set, ()):
-            if candidate.courier_id in couriers:
-                continue
-            gain = miss_probability[task_set] * candidate.willingness * (REJECT_PENALTY * len(task_set) - candidate.score)
-            if gain >= min_marginal_gain:
-                ranked.append((-gain / max(candidate.score, 1e-9), candidate.score, candidate))
-
-    for _, _, candidate in sorted(ranked):
-        if expired(deadline):
-            break
-        task_set = candidate.task_set
-        task_key, couriers = expanded[task_set]
-        if len(couriers) >= max_offers_per_bundle:
-            continue
-        if candidate.courier_id in used_couriers:
-            continue
-        gain = miss_probability[task_set] * candidate.willingness * (REJECT_PENALTY * len(task_set) - candidate.score)
-        if gain < min_marginal_gain:
-            continue
-        couriers.append(candidate.courier_id)
-        used_couriers.add(candidate.courier_id)
-        miss_probability[task_set] *= 1.0 - candidate.willingness
-    return expanded
-
-
-def pair_only_starts(instance, deadline):
-    pair_candidates = [candidate for candidate in instance.candidates if len(candidate.tasks) > 1]
-    if not pair_candidates:
-        return {}
-    best = {}
-    best_obj = evaluate(instance, best)
-    strategies = (
-        (lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness, c.task_key), 3, 0.005),
-        (lambda c: (c.score / len(c.tasks), c.score, -c.willingness, c.task_key), 3, 0.005),
-        (lambda c: (c.score - 35.0 * len(c.tasks) * c.willingness, c.score, c.task_key), 3, 0.01),
-        (lambda c: (-c.willingness, c.score, c.task_key, c.courier_id), 3, 0.01),
-    )
-    for key_func, max_offers, min_gain in strategies:
-        if expired(deadline):
-            break
-        selected = choose_disjoint(instance, sorted(pair_candidates, key=key_func), deadline, None)
-        selected = expand_multi_offers(instance, selected, max_offers, min_gain, deadline)
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
+    for mask, candidates in problem.by_mask.items():
+        best[mask] = min(_candidate_metric(c, alpha) for c in candidates)
     return best
 
 
-def option_search_solve(instance, deadline):
-    options = build_group_options(instance, deadline)
-    if not options:
-        return {}
+def _min_cost_assignment(problem, groups, alpha):
+    """Assign one distinct courier to every group using min-cost max-flow."""
+    group_count = len(groups)
+    if group_count == 0:
+        return []
 
-    best_selected = {}
-    best_obj = evaluate(instance, best_selected)
-    orderings = (
-        lambda opt: (-opt.savings / max(len(opt.courier_ids), 1), -opt.savings, opt.penalty, opt.task_key),
-        lambda opt: (-opt.savings, len(opt.courier_ids), opt.penalty, opt.task_key),
-        lambda opt: (opt.penalty / len(opt.task_set), len(opt.courier_ids), -opt.savings, opt.task_key),
-        lambda opt: (-opt.savings / len(opt.task_set), opt.penalty, opt.task_key),
-    )
-    for key_func in orderings:
-        if expired(deadline):
-            break
-        selected_options = select_options(sorted(options, key=key_func), deadline)
-        selected_options = improve_options(selected_options, options, deadline)
-        selected = selected_from_options(selected_options)
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best_selected = selected
-            best_obj = obj
-    return best_selected
+    courier_index = {}
+    for courier in problem.all_couriers:
+        courier_index[courier] = len(courier_index)
 
+    source = 0
+    group_offset = 1
+    courier_offset = group_offset + group_count
+    sink = courier_offset + len(courier_index)
+    node_count = sink + 1
+    graph = [[] for _ in range(node_count)]
 
-def build_group_options(instance, deadline):
-    options = []
-    for task_set, candidates in instance.by_task_set.items():
-        if expired(deadline):
-            break
-        pool = option_pool(candidates)
-        seen = set()
-        local = []
-        max_size = min(3, len(pool))
-        for size in range(1, max_size + 1):
-            for combo in itertools.combinations(pool, size):
-                if expired(deadline):
-                    break
-                courier_ids = tuple(candidate.courier_id for candidate in combo)
-                if len(set(courier_ids)) != len(courier_ids):
-                    continue
-                ordered = tuple(sorted(combo, key=lambda item: (item.score, -item.willingness, item.courier_id)))
-                key = tuple(candidate.courier_id for candidate in ordered)
-                if key in seen:
-                    continue
-                seen.add(key)
-                penalty = group_expected_penalty(task_set, ordered)
-                option = GroupOption(task_set, ordered[0].task_key, key, penalty)
-                if option.savings > 1e-9:
-                    local.append(option)
-        options.extend(limit_local_options(local))
-    return options
+    metric_shift = 0.0
+    min_metric = 0.0
+    for mask in groups:
+        for cand in problem.by_mask.get(mask, []):
+            metric = _candidate_metric(cand, alpha)
+            if metric < min_metric:
+                min_metric = metric
+    if min_metric < 0.0:
+        metric_shift = -min_metric
 
+    def add_edge(u, v, cap, cost, payload):
+        graph[u].append([v, cap, cost, len(graph[v]), payload])
+        graph[v].append([u, 0, -cost, len(graph[u]) - 1, None])
 
-def option_pool(candidates):
-    pool = []
-    seen = set()
+    for i in range(group_count):
+        add_edge(source, group_offset + i, 1, 0.0, None)
 
-    def add_many(items, limit):
-        for candidate in items[:limit]:
-            if candidate.courier_id in seen:
+    for i, mask in enumerate(groups):
+        candidates = problem.by_mask.get(mask, [])
+        if not candidates:
+            return None
+        for cand in candidates:
+            j = courier_index.get(cand.courier)
+            if j is None:
                 continue
-            seen.add(candidate.courier_id)
-            pool.append(candidate)
+            cost = _candidate_metric(cand, alpha) + metric_shift
+            add_edge(group_offset + i, courier_offset + j, 1, cost, cand)
 
-    by_penalty = sorted(candidates, key=lambda c: (candidate_penalty(c), c.score, -c.willingness, c.courier_id))
-    by_score = sorted(candidates, key=lambda c: (c.score, -c.willingness, c.courier_id))
-    by_willing = sorted(candidates, key=lambda c: (-c.willingness, c.score, c.courier_id))
-    by_ratio = sorted(candidates, key=lambda c: (c.score / max(c.willingness, 1e-9), c.score, c.courier_id))
-    add_many(by_penalty, 8)
-    add_many(by_score, 5)
-    add_many(by_willing, 5)
-    add_many(by_ratio, 5)
-    return pool[:14]
+    for courier, j in courier_index.items():
+        add_edge(courier_offset + j, sink, 1, 0.0, courier)
 
+    potential = [0.0] * node_count
+    flow = 0
+    eps = 1e-12
 
-def limit_local_options(local):
-    if len(local) <= 18:
-        return local
-    selected = []
-    seen = set()
+    while flow < group_count:
+        dist = [1e100] * node_count
+        parent_v = [-1] * node_count
+        parent_e = [-1] * node_count
+        dist[source] = 0.0
+        heap = [(0.0, source)]
 
-    def add_options(items, limit):
-        for option in items[:limit]:
-            key = option.courier_ids
-            if key in seen:
+        while heap:
+            d, u = heapq.heappop(heap)
+            if d != dist[u]:
                 continue
-            seen.add(key)
-            selected.append(option)
+            for ei, edge in enumerate(graph[u]):
+                if edge[1] <= 0:
+                    continue
+                v = edge[0]
+                nd = d + edge[2] + potential[u] - potential[v]
+                if nd + eps < dist[v]:
+                    dist[v] = nd
+                    parent_v[v] = u
+                    parent_e[v] = ei
+                    heapq.heappush(heap, (nd, v))
 
-    add_options(sorted(local, key=lambda opt: (-opt.savings, opt.penalty, len(opt.courier_ids))), 8)
-    add_options(sorted(local, key=lambda opt: (-opt.savings / max(len(opt.courier_ids), 1), opt.penalty)), 6)
-    add_options(sorted(local, key=lambda opt: (opt.penalty, len(opt.courier_ids), -opt.savings)), 4)
-    add_options([opt for opt in local if len(opt.courier_ids) == 1], 3)
-    return selected[:18]
+        if parent_v[sink] < 0:
+            return None
+
+        for i in range(node_count):
+            if dist[i] < 1e90:
+                potential[i] += dist[i]
+
+        v = sink
+        while v != source:
+            u = parent_v[v]
+            ei = parent_e[v]
+            edge = graph[u][ei]
+            edge[1] -= 1
+            graph[v][edge[3]][1] += 1
+            v = u
+
+        flow += 1
+
+    assigned = []
+    for i in range(group_count):
+        u = group_offset + i
+        chosen = None
+        for edge in graph[u]:
+            if edge[4] is not None and edge[1] == 0:
+                chosen = edge[4]
+                break
+        if chosen is None:
+            return None
+        assigned.append(chosen)
+
+    return assigned
 
 
-def select_options(ordered_options, deadline):
-    selected = []
+def _evaluate_offer_groups(offer_groups):
+    seen_tasks = set()
+    seen_couriers = set()
+    total_score = 0.0
+    expected_accept = 0.0
+    offer_count = 0
+
+    for offers in offer_groups:
+        if not offers:
+            continue
+        mask = offers[0].mask
+        reject_prob = 1.0
+        for cand in offers:
+            # Invalid repeated courier assignments are heavily penalized.
+            if cand.courier in seen_couriers:
+                return (-1, -1e100, -1e100, -1e100)
+            seen_couriers.add(cand.courier)
+            total_score += cand.score
+            reject_prob *= max(0.0, min(1.0, 1.0 - cand.p))
+            offer_count += 1
+        for idx in _bits(mask):
+            seen_tasks.add(idx)
+        expected_accept += offers[0].task_count * (1.0 - reject_prob)
+
+    covered = len(seen_tasks)
+    # The explicit objective is lexicographic: cover as many tasks as possible,
+    # then minimize total_score.  Willingness is retained only as a final
+    # tie-break signal between equal-score plans.
+    score_key = -total_score + WILLINGNESS_VALUE * expected_accept
+    return (covered, score_key, expected_accept, -offer_count)
+
+
+def _state_from_assignment(assignment):
+    if assignment is None:
+        return None
+    return [[cand] for cand in assignment]
+
+
+def _state_total_score(state):
+    total = 0.0
+    for offers in state:
+        for cand in offers:
+            total += cand.score
+    return total
+
+
+def _official_expected_value(problem, state):
+    value = 0.0
+    covered = 0
+    used_couriers = set()
+    used_tasks = set()
+
+    for offers in state:
+        if not offers:
+            continue
+        offers = sorted(offers, key=lambda c: (c.score, -c.p, c.courier))
+        task_ids = [t.strip() for t in offers[0].task_str.split(",")]
+        if any(t in used_tasks for t in task_ids):
+            return 1e100
+
+        reject_prob = 1.0
+        for cand in offers:
+            if cand.courier in used_couriers:
+                return 1e100
+            used_couriers.add(cand.courier)
+            value += reject_prob * cand.p * cand.score
+            reject_prob *= max(0.0, min(1.0, 1.0 - cand.p))
+
+        value += reject_prob * FAIL_PENALTY * offers[0].task_count
+        covered += offers[0].task_count
+        for task_id in task_ids:
+            used_tasks.add(task_id)
+
+    value += FAIL_PENALTY * max(0, problem.n_tasks - covered)
+    return value
+
+
+def _group_value_prop(offers, task_count):
+    if not offers:
+        return FAIL_PENALTY * task_count
+    reject_prob = 1.0
+    p_sum = 0.0
+    weighted_score = 0.0
+    for cand in offers:
+        reject_prob *= max(0.0, min(1.0, 1.0 - cand.p))
+        p_sum += cand.p
+        weighted_score += cand.p * cand.score
+    avg_score = weighted_score / p_sum if p_sum > 0.0 else FAIL_PENALTY * task_count
+    return (1.0 - reject_prob) * avg_score + reject_prob * FAIL_PENALTY * task_count
+
+
+def _prop_expected_value(problem, state):
+    value = 0.0
+    covered = 0
     used_tasks = set()
     used_couriers = set()
-    for option in ordered_options:
-        if expired(deadline):
-            break
-        if option.savings <= 1e-9:
+    for offers in state:
+        if not offers:
             continue
-        if any(task_id in used_tasks for task_id in option.task_set):
-            continue
-        if any(courier_id in used_couriers for courier_id in option.courier_ids):
-            continue
-        selected.append(option)
-        used_tasks.update(option.task_set)
-        used_couriers.update(option.courier_ids)
-    return selected
+        task_ids = [t.strip() for t in offers[0].task_str.split(",")]
+        if any(t in used_tasks for t in task_ids):
+            return 1e100
+        for cand in offers:
+            if cand.courier in used_couriers:
+                return 1e100
+            used_couriers.add(cand.courier)
+        value += _group_value_prop(offers, offers[0].task_count)
+        covered += offers[0].task_count
+        for task_id in task_ids:
+            used_tasks.add(task_id)
+    value += FAIL_PENALTY * max(0, problem.n_tasks - covered)
+    return value
 
 
-def improve_options(selected_options, all_options, deadline):
-    selected = list(selected_options)
-    for _ in range(2):
-        if expired(deadline):
-            break
-        task_owner, courier_owner = option_owners(selected)
-        changed = False
-        for option in sorted(all_options, key=lambda opt: (-opt.savings, opt.penalty, len(opt.courier_ids))):
-            if expired(deadline):
-                break
-            conflicts = []
-            conflict_ids = set()
-            for task_id in option.task_set:
-                old = task_owner.get(task_id)
-                if old is not None and id(old) not in conflict_ids:
-                    conflict_ids.add(id(old))
-                    conflicts.append(old)
-            for courier_id in option.courier_ids:
-                old = courier_owner.get(courier_id)
-                if old is not None and id(old) not in conflict_ids:
-                    conflict_ids.add(id(old))
-                    conflicts.append(old)
-            removed_savings = sum(old.savings for old in conflicts)
-            if option.savings <= removed_savings + 1e-9:
+def _min_cost_assignment_expected(problem, groups):
+    group_count = len(groups)
+    if group_count == 0:
+        return []
+    if group_count > len(problem.all_couriers):
+        return None
+
+    courier_index = {}
+    for courier in problem.all_couriers:
+        courier_index[courier] = len(courier_index)
+
+    source = 0
+    group_offset = 1
+    courier_offset = group_offset + group_count
+    sink = courier_offset + len(courier_index)
+    node_count = sink + 1
+    graph = [[] for _ in range(node_count)]
+
+    def add_edge(u, v, cap, cost, payload):
+        graph[u].append([v, cap, cost, len(graph[v]), payload])
+        graph[v].append([u, 0, -cost, len(graph[u]) - 1, None])
+
+    for i in range(group_count):
+        add_edge(source, group_offset + i, 1, 0.0, None)
+
+    for i, mask in enumerate(groups):
+        candidates = problem.by_mask.get(mask, [])
+        if not candidates:
+            return None
+        task_count = _bit_count(mask)
+        for cand in candidates:
+            j = courier_index.get(cand.courier)
+            cost = cand.p * cand.score + (1.0 - cand.p) * FAIL_PENALTY * task_count
+            add_edge(group_offset + i, courier_offset + j, 1, cost, cand)
+
+    for courier, j in courier_index.items():
+        add_edge(courier_offset + j, sink, 1, 0.0, courier)
+
+    potential = [0.0] * node_count
+    flow = 0
+    while flow < group_count:
+        dist = [1e100] * node_count
+        parent_v = [-1] * node_count
+        parent_e = [-1] * node_count
+        dist[source] = 0.0
+        heap = [(0.0, source)]
+        while heap:
+            d, u = heapq.heappop(heap)
+            if d != dist[u]:
                 continue
-            selected = [old for old in selected if id(old) not in conflict_ids]
-            selected.append(option)
-            task_owner, courier_owner = option_owners(selected)
-            changed = True
-        if not changed:
-            break
-    return selected
+            for ei, edge in enumerate(graph[u]):
+                if edge[1] <= 0:
+                    continue
+                v = edge[0]
+                nd = d + edge[2] + potential[u] - potential[v]
+                if nd + 1e-12 < dist[v]:
+                    dist[v] = nd
+                    parent_v[v] = u
+                    parent_e[v] = ei
+                    heapq.heappush(heap, (nd, v))
+        if parent_v[sink] < 0:
+            return None
+        for i in range(node_count):
+            if dist[i] < 1e90:
+                potential[i] += dist[i]
+        v = sink
+        while v != source:
+            u = parent_v[v]
+            edge = graph[u][parent_e[v]]
+            edge[1] -= 1
+            graph[v][edge[3]][1] += 1
+            v = u
+        flow += 1
 
-
-def option_owners(selected_options):
-    task_owner = {}
-    courier_owner = {}
-    for option in selected_options:
-        for task_id in option.task_set:
-            task_owner[task_id] = option
-        for courier_id in option.courier_ids:
-            courier_owner[courier_id] = option
-    return task_owner, courier_owner
-
-
-def selected_from_options(options):
-    selected = {}
-    for option in options:
-        selected[option.task_set] = (option.task_key, list(option.courier_ids))
-    return selected
-
-
-def repair_search(instance, seed_selected, deadline):
-    best = normalize_selected(instance, seed_selected)
-    best_obj = evaluate(instance, best)
-    fill_order = sorted(
-        instance.candidates,
-        key=lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness, c.task_key, c.courier_id),
-    )
-    repair_candidates = limited_repair_candidates(instance)
-    checked = 0
-    for candidate in repair_candidates:
-        if expired(deadline) or checked >= 360:
-            break
-        checked += 1
-        selected = replace_with_candidate(instance, best, candidate, fill_order, deadline)
-        selected = expand_multi_offers(instance, selected, 3, 0.005, deadline)
-        selected = normalize_selected(instance, selected)
-        obj = evaluate(instance, selected)
-        if better(obj, best_obj):
-            best = selected
-            best_obj = obj
-    return best
-
-
-def reject_penalty_probe(instance, seed_selected, deadline, probe_penalties):
-    global REJECT_PENALTY
-    base_penalty = REJECT_PENALTY
-    best = normalize_selected(instance, seed_selected)
-    best_obj = evaluate(instance, best)
-    try:
-        for probe_penalty in probe_penalties:
-            if expired(deadline):
+    assigned = []
+    for i in range(group_count):
+        chosen = None
+        for edge in graph[group_offset + i]:
+            if edge[4] is not None and edge[1] == 0:
+                chosen = edge[4]
                 break
-            REJECT_PENALTY = probe_penalty
-            candidate = option_search_solve(instance, deadline)
-            if not candidate:
-                candidate = best
-            if not expired(deadline):
-                candidate = repair_search(instance, candidate, deadline)
-            candidate = normalize_selected(instance, candidate)
-            REJECT_PENALTY = base_penalty
-            obj = evaluate(instance, candidate)
-            if better(obj, best_obj):
-                best = candidate
-                best_obj = obj
-    finally:
-        REJECT_PENALTY = base_penalty
+        if chosen is None:
+            return None
+        assigned.append(chosen)
+    return assigned
+
+
+def _greedy_expected_assignment(problem, groups, model, ensure_initial=True):
+    """Assign courier lists for the expected-penalty objective."""
+    state = [[] for _ in groups]
+    used_couriers = set()
+
+    initial = _min_cost_assignment_expected(problem, groups) if ensure_initial else None
+    if ensure_initial and initial is not None:
+        for i, cand in enumerate(initial):
+            state[i].append(cand)
+            used_couriers.add(cand.courier)
+
+    while len(used_couriers) < len(problem.all_couriers):
+        best = None
+        for group_index, mask in enumerate(groups):
+            task_count = _bit_count(mask)
+            if model == "prop":
+                current_value = _group_value_prop(state[group_index], task_count)
+            else:
+                current_value = _official_expected_value(problem, [state[group_index]])
+            for cand in problem.by_mask.get(mask, []):
+                if cand.courier in used_couriers:
+                    continue
+                trial_offers = state[group_index] + [cand]
+                if model == "prop":
+                    trial_value = _group_value_prop(trial_offers, task_count)
+                else:
+                    trial_value = _official_expected_value(problem, [trial_offers])
+                saving = current_value - trial_value
+                if saving <= 1e-12:
+                    continue
+                if best is None or saving > best[0]:
+                    best = (saving, group_index, cand)
+
+        if best is None:
+            break
+
+        _, group_index, cand = best
+        state[group_index].append(cand)
+        used_couriers.add(cand.courier)
+
+    output_state = []
+    for offers in state:
+        if offers:
+            output_state.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
+    return output_state
+
+
+def _best_first_saving(problem, mask):
+    best = -1e100
+    threshold = FAIL_PENALTY * _bit_count(mask)
+    for cand in problem.by_mask.get(mask, []):
+        saving = cand.p * (threshold - cand.score)
+        if saving > best:
+            best = saving
     return best
 
 
-def scarce_coverage_repair(instance, seed_selected, deadline):
-    best = normalize_selected(instance, seed_selected)
-    best_obj = evaluate(instance, best)
-    fill_order = sorted(
-        instance.candidates,
-        key=lambda c: (
-            -len(c.tasks),
-            candidate_penalty(c) / len(c.tasks),
-            c.score,
-            -c.willingness,
-            c.task_key,
-            c.courier_id,
-        ),
-    )
-    for _ in range(2):
-        if expired(deadline):
-            break
-        uncovered = uncovered_tasks(instance, best)
-        if not uncovered:
-            break
+def _make_expected_grouping(problem, mode, threshold, noise, seed):
+    rnd = random.Random(seed)
+    single_saving = {}
+    for mask in problem.single_masks:
+        single_saving[mask] = _best_first_saving(problem, mask)
+
+    edges = []
+    for mask in problem.pair_masks:
+        pair_bits = _bits(mask)
+        if len(pair_bits) != 2:
+            continue
+        left = 1 << pair_bits[0]
+        right = 1 << pair_bits[1]
+        pair_saving = _best_first_saving(problem, mask)
+        if mode == "pair_gain":
+            value = pair_saving - single_saving.get(left, 0.0) - single_saving.get(right, 0.0)
+        elif mode == "pair_raw":
+            value = pair_saving
+        else:
+            value = pair_saving - 0.5 * (
+                single_saving.get(left, 0.0) + single_saving.get(right, 0.0)
+            )
+        if noise:
+            value += (rnd.random() - 0.5) * noise
+        edges.append((value, mask))
+
+    edges.sort(reverse=True)
+    used = 0
+    groups = []
+    for value, mask in edges:
+        if used & mask:
+            continue
+        if value >= threshold:
+            groups.append(mask)
+            used |= mask
+
+    for i in range(problem.n_tasks):
+        mask = 1 << i
+        if not (used & mask) and mask in problem.by_mask:
+            groups.append(mask)
+            used |= mask
+
+    return _groups_key(groups)
+
+
+def _make_forced_pair_grouping(problem):
+    pair_scores = []
+    for mask in problem.pair_masks:
+        pair_bits = _bits(mask)
+        if len(pair_bits) != 2:
+            continue
+        pair_scores.append((_best_first_saving(problem, mask), mask))
+    pair_scores.sort(reverse=True)
+
+    used = 0
+    groups = []
+    for _, mask in pair_scores:
+        if used & mask:
+            continue
+        groups.append(mask)
+        used |= mask
+
+    for i in range(problem.n_tasks):
+        mask = 1 << i
+        if not (used & mask) and mask in problem.by_mask:
+            groups.append(mask)
+            used |= mask
+
+    return _groups_key(groups)
+
+
+def _candidate_saving_assignment(problem):
+    """Sparse-courier fallback: choose the best task-bundle/courier triples."""
+    rows = []
+    for mask, candidates in problem.by_mask.items():
+        task_count = _bit_count(mask)
+        threshold = FAIL_PENALTY * task_count
+        for cand in candidates:
+            saving = cand.p * (threshold - cand.score)
+            if saving > 0.0:
+                rows.append((saving, mask, cand))
+    rows.sort(reverse=True, key=lambda x: (x[0], x[2].p, -x[2].score))
+
+    used_tasks = 0
+    used_couriers = set()
+    state = []
+    for _, mask, cand in rows:
+        if used_tasks & mask:
+            continue
+        if cand.courier in used_couriers:
+            continue
+        state.append([cand])
+        used_tasks |= mask
+        used_couriers.add(cand.courier)
+    return state
+
+
+def _local_replace_sparse(problem, state, deadline):
+    current = [list(offers) for offers in state if offers]
+    current_value = _prop_expected_value(problem, current)
+
+    rows = []
+    for mask, candidates in problem.by_mask.items():
+        for cand in candidates:
+            rows.append((mask, cand))
+
+    while time.time() < deadline:
         improved = False
-        checked = 0
-        for candidate in scarce_uncovered_candidates(instance, uncovered):
-            if expired(deadline) or checked >= 700:
+        for remove_index in range(len(current)):
+            if time.time() >= deadline:
                 break
-            checked += 1
-            selected = replace_with_candidate(instance, best, candidate, fill_order, deadline)
-            selected = expand_multi_offers(instance, selected, 3, 0.005, deadline)
-            selected = normalize_selected(instance, selected)
-            obj = evaluate(instance, selected)
-            if better(obj, best_obj):
-                best = selected
-                best_obj = obj
-                improved = True
+            base = []
+            base_tasks = 0
+            base_couriers = set()
+            for i, offers in enumerate(current):
+                if i == remove_index:
+                    continue
+                base.append(list(offers))
+                base_tasks |= offers[0].mask
+                for cand in offers:
+                    base_couriers.add(cand.courier)
+
+            for mask, cand in rows:
+                if base_tasks & mask:
+                    continue
+                if cand.courier in base_couriers:
+                    continue
+                trial = base + [[cand]]
+                trial_value = _prop_expected_value(problem, trial)
+                if trial_value + 1e-9 < current_value:
+                    current = trial
+                    current_value = trial_value
+                    improved = True
+                    break
+            if improved:
+                break
         if not improved:
             break
-    return best
+    return current
 
 
-def scarce_courier_reassignment(instance, seed_selected, deadline):
-    selected = normalize_selected(instance, seed_selected)
-    if not selected:
-        return selected
-    best_obj = evaluate(instance, selected)
-    max_group_size = 3
-    passes = 0
-    while passes < 6 and not expired(deadline):
-        passes += 1
+def _state_model_value(problem, state, model):
+    if model == "prop":
+        return _prop_expected_value(problem, state)
+    return _official_expected_value(problem, state)
+
+
+def _local_improve_expected(problem, state, deadline, model):
+    if not state:
+        return state
+
+    current = [list(offers) for offers in state]
+    current_value = _state_model_value(problem, current, model)
+    by_key = {}
+    for offers in current:
+        if not offers:
+            continue
+        mask = offers[0].mask
+        for cand in problem.by_mask.get(mask, []):
+            by_key[(mask, cand.courier)] = cand
+
+    while time.time() < deadline:
         improved = False
-        groups = list(selected.keys())
-        current_penalties = {}
-        for task_set in groups:
-            task_key, couriers = selected[task_set]
-            current_penalties[task_set] = reassignment_group_penalty(instance, task_set, task_key, couriers)
 
-        # Move one courier from an over-supported group to a group where that courier
-        # is a better marginal fit. Keeping source non-empty avoids risky coverage loss.
-        best_move = None
-        for source in groups:
-            if expired(deadline):
+        # Move one courier from one task bundle to another.
+        for from_index in range(len(current)):
+            if time.time() >= deadline or improved:
                 break
-            source_key, source_couriers = selected[source]
-            if len(source_couriers) <= 1:
+            if len(current[from_index]) <= 1:
                 continue
-            for courier_id in list(source_couriers):
-                for target in groups:
-                    if source == target:
+            moving_offers = list(current[from_index])
+            for cand in moving_offers:
+                if improved:
+                    break
+                for to_index in range(len(current)):
+                    if time.time() >= deadline:
+                        break
+                    if from_index == to_index:
                         continue
-                    target_key, target_couriers = selected[target]
-                    if len(target_couriers) >= max_group_size:
+                    target_mask = current[to_index][0].mask
+                    replacement = by_key.get((target_mask, cand.courier))
+                    if replacement is None:
                         continue
-                    if instance.by_offer.get((target_key, courier_id)) is None:
+                    if any(x.courier == cand.courier for x in current[to_index]):
                         continue
-                    new_source = [c for c in source_couriers if c != courier_id]
-                    new_target = list(target_couriers) + [courier_id]
-                    before = current_penalties[source] + current_penalties[target]
-                    after = (
-                        reassignment_group_penalty(instance, source, source_key, new_source)
-                        + reassignment_group_penalty(instance, target, target_key, new_target)
-                    )
-                    gain = before - after
-                    if gain > 1e-9 and (best_move is None or gain > best_move[0]):
-                        best_move = (gain, source, target, courier_id)
 
-        if best_move is not None:
-            _, source, target, courier_id = best_move
-            source_key, source_couriers = selected[source]
-            target_key, target_couriers = selected[target]
-            selected[source] = (source_key, [c for c in source_couriers if c != courier_id])
-            selected[target] = (target_key, list(target_couriers) + [courier_id])
-            selected = normalize_selected(instance, selected)
-            obj = evaluate(instance, selected)
-            if better(obj, best_obj):
-                best_obj = obj
-                improved = True
-            else:
-                return normalize_selected(instance, seed_selected)
+                    trial = [list(offers) for offers in current]
+                    trial[from_index] = [
+                        x for x in trial[from_index] if x.courier != cand.courier
+                    ]
+                    trial[to_index].append(replacement)
+                    trial_value = _state_model_value(problem, trial, model)
+                    if trial_value + 1e-9 < current_value:
+                        current = trial
+                        current_value = trial_value
+                        improved = True
+                        break
+
+        if improved:
             continue
 
-        best_swap = None
-        groups = list(selected.keys())
-        current_penalties = {}
-        for task_set in groups:
-            task_key, couriers = selected[task_set]
-            current_penalties[task_set] = reassignment_group_penalty(instance, task_set, task_key, couriers)
-        for left_index in range(len(groups)):
-            if expired(deadline):
+        # Swap two couriers between task bundles.
+        for left_index in range(len(current)):
+            if time.time() >= deadline or improved:
                 break
-            left = groups[left_index]
-            left_key, left_couriers = selected[left]
-            for right in groups[left_index + 1:]:
-                right_key, right_couriers = selected[right]
-                for left_courier in left_couriers:
-                    if instance.by_offer.get((right_key, left_courier)) is None:
-                        continue
-                    for right_courier in right_couriers:
-                        if instance.by_offer.get((left_key, right_courier)) is None:
+            for right_index in range(left_index + 1, len(current)):
+                if time.time() >= deadline or improved:
+                    break
+                left_mask = current[left_index][0].mask
+                right_mask = current[right_index][0].mask
+                left_offers = list(current[left_index])
+                right_offers = list(current[right_index])
+                for left_cand in left_offers:
+                    if improved:
+                        break
+                    for right_cand in right_offers:
+                        if time.time() >= deadline:
+                            break
+                        new_left = by_key.get((left_mask, right_cand.courier))
+                        new_right = by_key.get((right_mask, left_cand.courier))
+                        if new_left is None or new_right is None:
                             continue
-                        new_left = [right_courier if c == left_courier else c for c in left_couriers]
-                        new_right = [left_courier if c == right_courier else c for c in right_couriers]
-                        before = current_penalties[left] + current_penalties[right]
-                        after = (
-                            reassignment_group_penalty(instance, left, left_key, new_left)
-                            + reassignment_group_penalty(instance, right, right_key, new_right)
-                        )
-                        gain = before - after
-                        if gain > 1e-9 and (best_swap is None or gain > best_swap[0]):
-                            best_swap = (gain, left, right, left_courier, right_courier)
 
-        if best_swap is not None:
-            _, left, right, left_courier, right_courier = best_swap
-            left_key, left_couriers = selected[left]
-            right_key, right_couriers = selected[right]
-            selected[left] = (left_key, [right_courier if c == left_courier else c for c in left_couriers])
-            selected[right] = (right_key, [left_courier if c == right_courier else c for c in right_couriers])
-            selected = normalize_selected(instance, selected)
-            obj = evaluate(instance, selected)
-            if better(obj, best_obj):
-                best_obj = obj
-                improved = True
-            else:
-                return normalize_selected(instance, seed_selected)
+                        trial = [list(offers) for offers in current]
+                        trial[left_index] = [
+                            new_left if x.courier == left_cand.courier else x
+                            for x in trial[left_index]
+                        ]
+                        trial[right_index] = [
+                            new_right if x.courier == right_cand.courier else x
+                            for x in trial[right_index]
+                        ]
+                        trial_value = _state_model_value(problem, trial, model)
+                        if trial_value + 1e-9 < current_value:
+                            current = trial
+                            current_value = trial_value
+                            improved = True
+                            break
 
         if not improved:
             break
-    return normalize_selected(instance, selected)
+
+    output = []
+    for offers in current:
+        if offers:
+            output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
+    return output
 
 
-def reassignment_group_penalty(instance, task_set, task_key, couriers):
-    ordered = []
-    for courier_id in sorted(couriers, key=lambda cid: courier_order_key(instance, task_key, cid)):
-        candidate = instance.by_offer.get((task_key, courier_id))
-        if candidate is None or candidate.task_set != task_set:
-            return float("inf")
-        ordered.append(candidate)
-    return group_expected_penalty(task_set, ordered)
+def _state_to_output(state):
+    """
+    Match the official example container:
+        result.append((task_id_list_str, [courier_id, ...]))
 
-
-def uncovered_tasks(instance, selected):
-    covered = set()
-    for task_set in selected:
-        covered.update(task_set)
+    The baseline uses a one-element courier list.  The official format allows a
+    list, and the judge's expected-score objective rewards assigning several
+    couriers to the same task bundle.  This final pass still repeats the
+    baseline's defensive de-duplication for tasks and couriers.
+    """
+    assigned_couriers = set()
+    assigned_tasks = set()
     result = []
-    for task_id in instance.task_ids:
-        if task_id not in covered:
-            result.append(task_id)
-    return set(result)
 
+    if not state:
+        return result
 
-def scarce_uncovered_candidates(instance, uncovered):
-    ranked = []
-    for candidate in instance.candidates:
-        overlap = 0
-        for task_id in candidate.tasks:
-            if task_id in uncovered:
-                overlap += 1
-        if overlap == 0:
+    for offers in state:
+        if not offers:
             continue
-        ranked.append((
-            -overlap,
-            candidate_penalty(candidate) / len(candidate.tasks),
-            candidate.score / max(candidate.willingness, 1e-9),
-            candidate.score,
-            -candidate.willingness,
-            candidate,
-        ))
-    return [item[-1] for item in sorted(ranked)]
 
+        offers = sorted(offers, key=lambda c: (c.score, -c.p, c.courier))
+        task_id_list_str = offers[0].task_str
+        task_ids = [t.strip() for t in task_id_list_str.split(",")]
 
-def limited_repair_candidates(instance):
-    selected = []
-    seen = set()
+        # 跳过已分配的订单
+        if any(t in assigned_tasks for t in task_ids):
+            continue
 
-    def add_many(items, limit):
-        for candidate in items[:limit]:
-            key = (candidate.task_set, candidate.courier_id)
-            if key in seen:
+        courier_ids = []
+        for cand in offers:
+            courier_id = cand.courier
+            # 跳过已分配的骑手
+            if courier_id in assigned_couriers:
                 continue
-            seen.add(key)
-            selected.append(candidate)
+            assigned_couriers.add(courier_id)
+            courier_ids.append(courier_id)
 
-    add_many(
-        sorted(instance.candidates, key=lambda c: (candidate_penalty(c) / len(c.tasks), c.score, -c.willingness)),
-        180,
-    )
-    add_many(
-        sorted(instance.candidates, key=lambda c: (c.score / max(c.willingness, 1e-9), c.score, c.task_key)),
-        120,
-    )
-    add_many(
-        sorted(instance.candidates, key=lambda c: (-len(c.tasks), candidate_penalty(c) / len(c.tasks), c.score)),
-        120,
-    )
-    add_many(
-        sorted(instance.candidates, key=lambda c: (c.score - 50.0 * len(c.tasks) * c.willingness, c.score)),
-        120,
-    )
-    return selected
-
-
-def replace_with_candidate(instance, seed_selected, candidate, fill_order, deadline):
-    selected = {}
-    covered_tasks = set()
-    used_couriers = set()
-    add_candidate_to_selected(selected, candidate, covered_tasks, used_couriers)
-
-    for task_set, value in sorted(seed_selected.items(), key=lambda item: item[1][0]):
-        if expired(deadline):
-            break
-        task_key, couriers = value
-        if any(task_id in covered_tasks for task_id in task_set):
+        if not courier_ids:
             continue
-        kept = []
-        for courier_id in couriers:
-            if courier_id not in used_couriers:
-                kept.append(courier_id)
-        if not kept:
-            continue
-        selected[task_set] = (task_key, kept)
-        covered_tasks.update(task_set)
-        used_couriers.update(kept)
 
-    for filler in fill_order:
-        if expired(deadline):
-            break
-        if candidate_penalty(filler) >= REJECT_PENALTY * len(filler.tasks):
-            continue
-        task_set = filler.task_set
-        if filler.courier_id in used_couriers:
-            continue
-        if any(task_id in covered_tasks for task_id in task_set):
-            continue
-        add_candidate_to_selected(selected, filler, covered_tasks, used_couriers)
-        if len(covered_tasks) == len(instance.task_ids):
-            break
-    return selected
+        # 分配
+        for t in task_ids:
+            assigned_tasks.add(t)
+        result.append((task_id_list_str, courier_ids))
 
-
-def add_candidate_to_selected(selected, candidate, covered_tasks, used_couriers):
-    task_set = candidate.task_set
-    selected[task_set] = (candidate.task_key, [candidate.courier_id])
-    covered_tasks.update(task_set)
-    used_couriers.add(candidate.courier_id)
-
-
-def normalize_selected(instance, selected):
-    normalized = {}
-    for task_set, value in selected.items():
-        task_key, couriers = value
-        if not couriers:
-            continue
-        normalized[task_set] = (
-            task_key,
-            sorted(
-                couriers,
-                key=lambda courier_id: courier_order_key(instance, task_key, courier_id),
-            ),
-        )
-    return normalized
-
-
-def courier_order_key(instance, task_key, courier_id):
-    candidate = instance.by_offer.get((task_key, courier_id))
-    if candidate is None:
-        return (float("inf"), 0.0, courier_id)
-    return (candidate.score, -candidate.willingness, courier_id)
-
-
-def is_scarce_instance(instance):
-    task_count = len(instance.task_ids)
-    if task_count == 0:
-        return False
-    return courier_count(instance) <= task_count * 1.15
-
-
-def is_low_willingness_instance(instance):
-    if not instance.task_ids:
-        return False
-    if is_scarce_instance(instance) or is_complete_pair_dense_instance(instance):
-        return False
-    if courier_count(instance) < len(instance.task_ids) * 1.8:
-        return False
-    values = [candidate.willingness for candidate in instance.candidates]
-    return median_value(values) < 0.18
-
-
-def is_compact_bundle_instance(instance):
-    if len(instance.task_ids) > 35:
-        return False
-    if is_low_willingness_instance(instance) or is_scarce_instance(instance) or is_complete_pair_dense_instance(instance):
-        return False
-    return has_strong_bundle_discount(instance)
-
-
-def time_budget_for_instance(instance):
-    if is_complete_pair_dense_instance(instance):
-        return 6.8
-    return 7.9
-
-
-def is_complete_pair_dense_instance(instance):
-    task_count = len(instance.task_ids)
-    if task_count < 38:
-        return False
-    if courier_count(instance) < task_count * 1.8:
-        return False
-    pair_count = 0
-    for task_set in instance.by_task_set:
-        if len(task_set) == 2:
-            pair_count += 1
-    expected_pairs = task_count * (task_count - 1) // 2
-    return pair_count >= expected_pairs * 0.95
-
-
-def courier_count(instance):
-    couriers = set()
-    for candidate in instance.candidates:
-        couriers.add(candidate.courier_id)
-    return len(couriers)
-
-
-def has_strong_bundle_discount(instance):
-    single_scores = []
-    bundle_scores = []
-    for candidate in instance.candidates:
-        if len(candidate.tasks) == 1:
-            single_scores.append(candidate.score)
-        elif len(candidate.tasks) > 1:
-            bundle_scores.append(candidate.score / len(candidate.tasks))
-    if not single_scores or not bundle_scores:
-        return False
-    return median_value(bundle_scores) <= 0.68 * median_value(single_scores)
-
-
-def median_value(values):
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    middle = len(ordered) // 2
-    if len(ordered) % 2:
-        return ordered[middle]
-    return (ordered[middle - 1] + ordered[middle]) / 2.0
-
-
-def evaluate(instance, selected):
-    used_couriers = set()
-    covered_tasks = set()
-    expected = 0.0
-    total_score = 0.0
-    expected_penalty = 0.0
-    offer_count = 0
-    feasible = True
-
-    for task_set, value in selected.items():
-        task_key, couriers = value
-        if any(task_id in covered_tasks for task_id in task_set):
-            feasible = False
-        probabilities = []
-        remain = 1.0
-        group_expected_score = 0.0
-        for courier_id in couriers:
-            candidate = instance.by_offer.get((task_key, courier_id))
-            if candidate is None or candidate.task_set != task_set or courier_id in used_couriers:
-                feasible = False
-                continue
-            probabilities.append(candidate.willingness)
-            group_expected_score += remain * candidate.willingness * candidate.score
-            remain *= 1.0 - candidate.willingness
-            total_score += candidate.score
-            offer_count += 1
-            used_couriers.add(courier_id)
-        covered_tasks.update(task_set)
-        expected += len(task_set) * acceptance_probability(probabilities)
-        expected_penalty += group_expected_score + remain * REJECT_PENALTY * len(task_set)
-    total_penalty = expected_penalty + REJECT_PENALTY * (len(instance.task_ids) - len(covered_tasks))
-    return (feasible, -total_penalty, len(covered_tasks), expected, -total_score, -offer_count)
-
-
-def group_expected_penalty(task_set, ordered_candidates):
-    remain = 1.0
-    penalty = 0.0
-    for candidate in ordered_candidates:
-        probability = candidate.willingness
-        if probability < 0.0:
-            probability = 0.0
-        elif probability > 1.0:
-            probability = 1.0
-        penalty += remain * probability * candidate.score
-        remain *= 1.0 - probability
-    penalty += remain * REJECT_PENALTY * len(task_set)
-    return penalty
-
-
-def better(candidate_obj, incumbent_obj):
-    return candidate_obj > incumbent_obj
-
-
-def assignment_to_result(selected):
-    result = []
-    for _, value in sorted(selected.items(), key=lambda item: item[1][0]):
-        task_key, couriers = value
-        if couriers:
-            result.append((task_key, list(couriers)))
     return result
 
 
-def acceptance_probability(probabilities):
-    miss = 1.0
-    for probability in probabilities:
-        if probability < 0.0:
-            probability = 0.0
-        elif probability > 1.0:
-            probability = 1.0
-        miss *= 1.0 - probability
-    return 1.0 - miss
+def _groups_key(groups):
+    return tuple(sorted(groups))
 
 
-def candidate_penalty(candidate):
-    task_count = len(candidate.tasks)
-    return candidate.willingness * candidate.score + (1.0 - candidate.willingness) * REJECT_PENALTY * task_count
+def _all_single_grouping(problem):
+    groups = []
+    for i in range(problem.n_tasks):
+        mask = 1 << i
+        if mask in problem.by_mask:
+            groups.append(mask)
+    return _groups_key(groups)
 
 
-def expired(deadline):
-    return time.perf_counter() >= deadline
+def _make_greedy_grouping(problem, alpha, threshold, noise, seed):
+    best = _best_metric_by_mask(problem, alpha)
+    rnd = random.Random(seed)
+    edges = []
+
+    for mask in problem.pair_masks:
+        pair_bits = _bits(mask)
+        if len(pair_bits) != 2:
+            continue
+        a = 1 << pair_bits[0]
+        b = 1 << pair_bits[1]
+        if a not in best or b not in best:
+            continue
+        saving = best[a] + best[b] - best[mask]
+        noisy_value = saving
+        if noise:
+            noisy_value += (rnd.random() - 0.5) * noise
+        edges.append((noisy_value, saving, mask))
+
+    edges.sort(reverse=True)
+    used = 0
+    groups = []
+    for _, saving, mask in edges:
+        if used & mask:
+            continue
+        if saving > threshold:
+            groups.append(mask)
+            used |= mask
+
+    for i in range(problem.n_tasks):
+        mask = 1 << i
+        if not (used & mask) and mask in problem.by_mask:
+            groups.append(mask)
+            used |= mask
+
+    return _groups_key(groups)
+
+
+def _make_courier_greedy_grouping(problem, alpha):
+    rows = []
+    for mask, candidates in problem.by_mask.items():
+        task_count = _bit_count(mask)
+        if task_count > 2:
+            continue
+        for cand in candidates[:12]:
+            rows.append((_candidate_metric(cand, alpha) / max(1, task_count), cand))
+    rows.sort(key=lambda x: (x[0], x[1].score, -x[1].p))
+
+    used_tasks = 0
+    used_couriers = set()
+    groups = []
+    for _, cand in rows:
+        if used_tasks & cand.mask:
+            continue
+        if cand.courier in used_couriers:
+            continue
+        groups.append(cand.mask)
+        used_tasks |= cand.mask
+        used_couriers.add(cand.courier)
+
+    for i in range(problem.n_tasks):
+        mask = 1 << i
+        if not (used_tasks & mask) and mask in problem.by_mask:
+            groups.append(mask)
+            used_tasks |= mask
+
+    return _groups_key(groups)
+
+
+def _enumerate_partitions(problem, mask):
+    bit_list = _bits(mask)
+    result = []
+
+    def rec(remaining, current):
+        if not remaining:
+            result.append(_groups_key(current))
+            return
+        first = remaining[0]
+        single = 1 << first
+        if single in problem.by_mask:
+            rec(remaining[1:], current + [single])
+        for k in range(1, len(remaining)):
+            second = remaining[k]
+            pair = (1 << first) | (1 << second)
+            if pair in problem.by_mask:
+                rec(remaining[1:k] + remaining[k + 1 :], current + [pair])
+
+    rec(bit_list, [])
+    return result
+
+
+def _try_state(problem, groups, alpha, cache):
+    key = (_groups_key(groups), alpha)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
+    assignment = _min_cost_assignment(problem, list(key[0]), alpha)
+    state = _state_from_assignment(assignment)
+    if state is None:
+        cache[key] = None
+    else:
+        cache[key] = state
+    return cache[key]
+
+
+def _local_repartition(problem, start_groups, alpha, deadline, cache):
+    """Directly improve a grouping by repartitioning up to four tasks."""
+    current_groups = _groups_key(start_groups)
+    current_state = _try_state(problem, current_groups, alpha, cache)
+    if current_state is None:
+        return current_groups, None
+
+    current_key = _evaluate_offer_groups(current_state)
+    rnd = random.Random(20260515)
+    improved = True
+
+    while improved and time.time() < deadline:
+        improved = False
+        groups_list = list(current_groups)
+        pair_indices = []
+        group_len = len(groups_list)
+        for i in range(group_len):
+            for j in range(i + 1, group_len):
+                pair_indices.append((i, j))
+        rnd.shuffle(pair_indices)
+
+        for i, j in pair_indices:
+            if time.time() >= deadline:
+                break
+            left = groups_list[i]
+            right = groups_list[j]
+            union_mask = left | right
+            if _bit_count(union_mask) > 4:
+                continue
+            alternatives = _enumerate_partitions(problem, union_mask)
+            rnd.shuffle(alternatives)
+            old_parts = _groups_key([left, right])
+
+            for alt in alternatives:
+                if alt == old_parts:
+                    continue
+                new_groups = []
+                for k, mask in enumerate(groups_list):
+                    if k != i and k != j:
+                        new_groups.append(mask)
+                new_groups.extend(list(alt))
+                new_groups = _groups_key(new_groups)
+                state = _try_state(problem, new_groups, alpha, cache)
+                if state is None:
+                    continue
+                key = _evaluate_offer_groups(state)
+                if key > current_key:
+                    current_groups = new_groups
+                    current_state = state
+                    current_key = key
+                    improved = True
+                    break
+            if improved:
+                break
+
+    return current_groups, current_state
+
+
+def solve(input_text: str) -> list:
+    """
+    输入：制表符分隔的文本（含表头）
+    输出：[(task_id_list_str, [courier_id, ...]), ...]
+    """
+    problem = _parse_input(input_text)
+    if problem.n_tasks == 0:
+        return []
+
+    start_time = time.time()
+    time_budget = _time_budget(problem)
+    deadline = start_time + time_budget
+    group_deadline = start_time + max(0.06, time_budget * 0.25)
+
+    best = [1e100, None]
+    tried = set()
+    target_model = "prop" if len(problem.all_couriers) >= problem.n_tasks else "seq"
+    avg_willingness = 0.0
+    willingness_count = 0
+    for candidates in problem.by_mask.values():
+        for cand in candidates:
+            avg_willingness += cand.p
+            willingness_count += 1
+    if willingness_count:
+        avg_willingness /= willingness_count
+
+    def consider(groups, model=None, ensure_initial=True):
+        if model is None:
+            model = target_model
+        groups = _groups_key(groups)
+        key = (groups, model, ensure_initial)
+        if key in tried:
+            return
+        tried.add(key)
+        state = _greedy_expected_assignment(problem, groups, model, ensure_initial)
+        value = _state_model_value(problem, state, target_model)
+        if value < best[0]:
+            best[0] = value
+            best[1] = state
+
+    def consider_state(state):
+        value = _state_model_value(problem, state, target_model)
+        if value < best[0]:
+            best[0] = value
+            best[1] = state
+
+    # The single-task grouping is very strong when there are many couriers,
+    # because the official score charges expected cost, not raw offer count.
+    consider(_all_single_grouping(problem))
+    forced_pair_groups = _make_forced_pair_grouping(problem)
+    consider(forced_pair_groups, target_model)
+    if len(problem.all_couriers) <= problem.n_tasks * 1.35 or avg_willingness < 0.35:
+        consider(forced_pair_groups, "seq")
+        consider(forced_pair_groups, "seq", False)
+        sparse_state = _candidate_saving_assignment(problem)
+        if time.time() < deadline:
+            sparse_state = _local_replace_sparse(
+                problem, sparse_state, min(deadline, start_time + max(0.05, time_budget * 0.22))
+            )
+        consider_state(sparse_state)
+
+    # Pair-heavy groupings matter when couriers are scarce, because one courier
+    # can cover two tasks and avoid the 100-point failure penalty for both.
+    seed = 17
+    modes = ("pair_raw", "pair_half", "pair_gain")
+    thresholds = (-220.0, -140.0, -80.0, -40.0, -10.0, 0.0, 10.0, 25.0, 40.0, 60.0)
+    noises = (0.0, 2.0, 6.0, 12.0, 24.0)
+    for mode in modes:
+        for threshold in thresholds:
+            if time.time() >= group_deadline:
+                break
+            consider(_make_expected_grouping(problem, mode, threshold, 0.0, seed))
+            if len(problem.all_couriers) <= problem.n_tasks * 1.25:
+                consider(_make_expected_grouping(problem, mode, threshold, 0.0, seed), "seq", False)
+            seed += 19
+        if time.time() >= group_deadline:
+            break
+
+    # A few legacy score-based groupings are still useful as diverse partitions.
+    for alpha in (0.0, 0.5, 1.0, 2.0, -1.0):
+        if time.time() >= group_deadline:
+            break
+        consider(_make_greedy_grouping(problem, alpha, 0.0, 0.0, seed))
+        seed += 23
+
+    while time.time() < group_deadline:
+        for mode in modes:
+            for threshold in thresholds:
+                for noise in noises:
+                    if time.time() >= group_deadline:
+                        break
+                    groups = _make_expected_grouping(problem, mode, threshold, noise, seed)
+                    consider(groups)
+                    if len(problem.all_couriers) <= problem.n_tasks * 1.25:
+                        consider(groups, "seq", False)
+                    seed += 31
+                if time.time() >= group_deadline:
+                    break
+            if time.time() >= group_deadline:
+                break
+
+    if best[1] is None:
+        return []
+    if time.time() < deadline:
+        improved_state = _local_improve_expected(problem, best[1], deadline, target_model)
+        improved_value = _state_model_value(problem, improved_state, target_model)
+        if improved_value < best[0]:
+            best[0] = improved_value
+            best[1] = improved_state
+    return _state_to_output(best[1])

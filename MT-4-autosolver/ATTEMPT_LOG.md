@@ -167,3 +167,11 @@ Known stable-ish score profile:
 - Decision: reverted.
 - Lesson: public large local hashes and budget sweeps are not predictive enough for online dense cases. Do not tune dense time budget again without a new scoring/legality insight.
 - Status: failed online, code reverted.
+
+## Active Experiment: Adopt 719 Reference Baseline
+
+- Trigger: user provided `solution_719.61(1).py`, an online-scored reference solution around `719.61`.
+- Hypothesis: the main gap is not another small repair on the 747 family; the reference solution's expected-cost grouping model is closer to the hidden judge even though our local proxy often ranks it worse.
+- Code change: replace the submitted `MT-4-autosolver/submission.py` with the provided 719 reference solver as a new baseline.
+- Local evidence: under our proxy evaluator, the reference is not uniformly better (`large_seed301` and generated medium/high cases are worse), which confirms the proxy is unreliable and online evidence should dominate.
+- Guardrail: previous stable baseline remains recoverable at commit `4d83bf0`; this submission is intended to establish a stronger online floor before further hybridization.
