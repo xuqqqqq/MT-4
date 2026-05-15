@@ -191,3 +191,14 @@ Known stable-ish score profile:
 - Code change: when `len(all_couriers) < n_tasks`, consider `_make_courier_greedy_grouping()` for alpha `10/25/50/75` under the exact `seq` model before the standard pair-threshold loop.
 - Local evidence: on generated scarce, `_make_courier_greedy_grouping(alpha=50, seq)` improves the 719 seq proxy from about `1505` to `1483`, while the branch is not called for large/high/medium/low/small/tiny.
 - Risk: hidden scarce may still differ from the generator, but this is a candidate-generation change tightly gated to the observed `39/40` shortfall.
+- Online evidence: average stayed exactly `719.61`; all case scores were unchanged, including `scarce_couriers_seed401=1588.94` and `39/40`.
+- Lesson: adding scarce seeds without changing the pair/single partition search does not move hidden scarce. Future scarce attempts need a structural repartition or final-selection change, not more seed variants.
+- Status: online no-op; retained only as a safe scarce seed for later structural search.
+
+## Active Experiment: Low Multi-Offer Grouping + Scarce Repartition
+
+- Hypothesis: the 719 baseline's main low-willingness miss is that grouping uses the best single first-offer saving, while low probability cases need pair/single choices that account for two-offer acceptance. The scarce miss may be a wrong pair/single decomposition, so the dormant repartition operator should be tried under a strict scarce gate.
+- Code change: add a strict low-willingness classifier excluding complete-pair dense large cases; for low-like cases, evaluate pair/single grouping candidates with cached two-offer sequential savings and use `seq` as the selection model. For scarce-like cases, fix `_try_state()` failed-state caching and run `_local_repartition()` on forced-pair and courier-aware groupings.
+- Local evidence: generated hidden-like low improved from `seq=1544.972 / prop=1589.023` to `seq=1467.012 / prop=1546.973`; generated high-noise, large, medium, scarce, small, and tiny outputs stayed hash-identical except scarce spent extra time without changing local output.
+- Guardrail: true provided `large_seed301.txt` stayed hash-identical to the 719 baseline across 3 runs with `prop=667.084`, so the low classifier did not leak into the dense public large case.
+- Risk: online low may not match the local low generator; scarce repartition may remain a no-op if the hidden issue is final ranking rather than decomposition.

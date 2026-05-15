@@ -79,6 +79,16 @@ def _bits(mask):
     return out
 
 
+def _median_value(values):
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return 0.5 * (ordered[mid - 1] + ordered[mid])
+
+
 def _parse_input(input_text):
     problem = ParsedProblem()
     if not input_text:
@@ -178,6 +188,30 @@ def _time_budget(problem):
             return 7.0
         return 0.80
     return DEFAULT_TIME_LIMIT
+
+
+def _is_complete_pair_dense(problem):
+    if problem.n_tasks < 38:
+        return False
+    if len(problem.all_couriers) < problem.n_tasks * 1.8:
+        return False
+    expected_pairs = problem.n_tasks * (problem.n_tasks - 1) // 2
+    return len(problem.pair_masks) >= expected_pairs * 0.95
+
+
+def _is_low_willingness_like(problem):
+    if problem.n_tasks < 25:
+        return False
+    courier_count = len(problem.all_couriers)
+    if courier_count < problem.n_tasks * 1.8:
+        return False
+    if _is_complete_pair_dense(problem):
+        return False
+    values = []
+    for candidates in problem.by_mask.values():
+        for cand in candidates:
+            values.append(cand.p)
+    return _median_value(values) < 0.18
 
 
 def _candidate_metric(cand, alpha):
@@ -558,11 +592,74 @@ def _best_first_saving(problem, mask):
     return best
 
 
-def _make_expected_grouping(problem, mode, threshold, noise, seed):
+def _ordered_offer_saving(offers, task_count):
+    threshold = FAIL_PENALTY * task_count
+    reject_prob = 1.0
+    saving = 0.0
+    ordered = sorted(offers, key=lambda c: (c.score, -c.p, c.courier))
+    for cand in ordered:
+        p = max(0.0, min(1.0, cand.p))
+        saving += reject_prob * p * (threshold - cand.score)
+        reject_prob *= 1.0 - p
+    return saving
+
+
+def _option_pool_for_mask(problem, mask):
+    candidates = problem.by_mask.get(mask, [])
+    task_count = _bit_count(mask)
+    threshold = FAIL_PENALTY * task_count
+    pool = []
+    seen = set()
+
+    def add_many(rows, limit):
+        added = 0
+        for cand in rows:
+            if cand.courier in seen:
+                continue
+            seen.add(cand.courier)
+            pool.append(cand)
+            added += 1
+            if added >= limit:
+                break
+
+    by_single_cost = sorted(
+        candidates,
+        key=lambda c: (c.p * c.score + (1.0 - c.p) * threshold, c.score, -c.p, c.courier),
+    )
+    by_gain = sorted(
+        candidates,
+        key=lambda c: (-c.p * (threshold - c.score), c.score, -c.p, c.courier),
+    )
+    by_willing = sorted(candidates, key=lambda c: (-c.p, c.score, c.courier))
+
+    add_many(by_single_cost, 4)
+    add_many(by_gain, 3)
+    add_many(by_willing, 3)
+    return pool[:8]
+
+
+def _best_local_option_saving(problem, mask):
+    task_count = _bit_count(mask)
+    pool = _option_pool_for_mask(problem, mask)
+    best = 0.0
+    for i in range(len(pool)):
+        first = pool[i]
+        best = max(best, _ordered_offer_saving([first], task_count))
+        for j in range(i + 1, len(pool)):
+            second = pool[j]
+            if first.courier == second.courier:
+                continue
+            best = max(best, _ordered_offer_saving([first, second], task_count))
+    return best
+
+
+def _make_expected_grouping(problem, mode, threshold, noise, seed, saving_by_mask=None):
     rnd = random.Random(seed)
+    if saving_by_mask is None:
+        saving_by_mask = {}
     single_saving = {}
     for mask in problem.single_masks:
-        single_saving[mask] = _best_first_saving(problem, mask)
+        single_saving[mask] = saving_by_mask.get(mask, _best_first_saving(problem, mask))
 
     edges = []
     for mask in problem.pair_masks:
@@ -571,7 +668,7 @@ def _make_expected_grouping(problem, mode, threshold, noise, seed):
             continue
         left = 1 << pair_bits[0]
         right = 1 << pair_bits[1]
-        pair_saving = _best_first_saving(problem, mask)
+        pair_saving = saving_by_mask.get(mask, _best_first_saving(problem, mask))
         if mode == "pair_gain":
             value = pair_saving - single_saving.get(left, 0.0) - single_saving.get(right, 0.0)
         elif mode == "pair_raw":
@@ -962,9 +1059,8 @@ def _enumerate_partitions(problem, mask):
 
 def _try_state(problem, groups, alpha, cache):
     key = (_groups_key(groups), alpha)
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
+    if key in cache:
+        return cache[key]
 
     assignment = _min_cost_assignment(problem, list(key[0]), alpha)
     state = _state_from_assignment(assignment)
@@ -1049,7 +1145,9 @@ def solve(input_text: str) -> list:
 
     best = [1e100, None]
     tried = set()
-    target_model = "prop" if len(problem.all_couriers) >= problem.n_tasks else "seq"
+    scarce_like = len(problem.all_couriers) < problem.n_tasks
+    low_like = _is_low_willingness_like(problem)
+    target_model = "seq" if (scarce_like or low_like) else "prop"
     avg_willingness = 0.0
     willingness_count = 0
     for candidates in problem.by_mask.values():
@@ -1079,6 +1177,18 @@ def solve(input_text: str) -> list:
             best[0] = value
             best[1] = state
 
+    repartition_cache = {}
+
+    def consider_repartition(groups, alpha, limit_deadline):
+        if time.time() >= limit_deadline:
+            return
+        groups, state = _local_repartition(problem, groups, alpha, limit_deadline, repartition_cache)
+        if state is not None:
+            consider_state(state)
+            consider(groups, "seq", False)
+
+    seed = 17
+
     # The single-task grouping is very strong when there are many couriers,
     # because the official score charges expected cost, not raw offer count.
     consider(_all_single_grouping(problem))
@@ -1094,15 +1204,36 @@ def solve(input_text: str) -> list:
             )
         consider_state(sparse_state)
 
-    if len(problem.all_couriers) < problem.n_tasks:
+    if low_like and time.time() < group_deadline:
+        multi_saving = {}
+        for mask in problem.single_masks:
+            multi_saving[mask] = _best_local_option_saving(problem, mask)
+        for mask in problem.pair_masks:
+            multi_saving[mask] = _best_local_option_saving(problem, mask)
+        for mode in ("pair_gain", "pair_half"):
+            for low_threshold in (-25.0, -10.0, 0.0, 10.0, 25.0):
+                if time.time() >= group_deadline:
+                    break
+                groups = _make_expected_grouping(
+                    problem, mode, low_threshold, 0.0, seed, multi_saving
+                )
+                consider(groups, "seq")
+                seed += 37
+            if time.time() >= group_deadline:
+                break
+
+    if scarce_like:
+        repartition_deadline = min(deadline, start_time + max(0.20, time_budget * 0.55))
+        consider_repartition(forced_pair_groups, 0.0, repartition_deadline)
         for alpha in (10.0, 25.0, 50.0, 75.0):
             if time.time() >= group_deadline:
                 break
-            consider(_make_courier_greedy_grouping(problem, alpha), "seq")
+            groups = _make_courier_greedy_grouping(problem, alpha)
+            consider(groups, "seq")
+            consider_repartition(groups, alpha, repartition_deadline)
 
     # Pair-heavy groupings matter when couriers are scarce, because one courier
     # can cover two tasks and avoid the 100-point failure penalty for both.
-    seed = 17
     modes = ("pair_raw", "pair_half", "pair_gain")
     thresholds = (-220.0, -140.0, -80.0, -40.0, -10.0, 0.0, 10.0, 25.0, 40.0, 60.0)
     noises = (0.0, 2.0, 6.0, 12.0, 24.0)
