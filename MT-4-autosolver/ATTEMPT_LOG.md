@@ -174,4 +174,12 @@ Known stable-ish score profile:
 - Hypothesis: the main gap is not another small repair on the 747 family; the reference solution's expected-cost grouping model is closer to the hidden judge even though our local proxy often ranks it worse.
 - Code change: replace the submitted `MT-4-autosolver/submission.py` with the provided 719 reference solver as a new baseline.
 - Local evidence: under our proxy evaluator, the reference is not uniformly better (`large_seed301` and generated medium/high cases are worse), which confirms the proxy is unreliable and online evidence should dominate.
+- Online evidence: average `719.61`; every listed case improved versus the old 747-family baseline except tiny stayed tied, with the biggest remaining penalties in `low_willingness_seed501=1806.07` and `scarce_couriers_seed401=1588.94`.
 - Guardrail: previous stable baseline remains recoverable at commit `4d83bf0`; this submission is intended to establish a stronger online floor before further hybridization.
+
+## Active Experiment: Targeted Extra Search for Low/Scarce
+
+- Hypothesis: the 719 baseline still uses only a `0.80s` internal budget for medium-sized low-willingness and scarce-courier cases; giving only these two identifiable families more local-search time can improve the two dominant remaining penalties without perturbing large/high/medium.
+- Code change: in `_time_budget()`, for `tasks >= 25`, `candidate_count <= 20000`, and either average willingness below `0.16` or fewer couriers than tasks, return `7.0s`; all other budgets stay unchanged.
+- Local evidence: generated `low_willingness_seed501` improved under the 719 model from about `1589/1545` prop/seq to `1497/1453`; generated `scarce_couriers_seed401` improved from about `1624/1530` to `1605/1505`.
+- Risk: local model is still not perfectly predictive, but this branch is tightly gated to the two online shortfalls and leaves strong cases on the exact 719 path.

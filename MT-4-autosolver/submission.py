@@ -166,6 +166,16 @@ def _time_budget(problem):
     if candidates <= 8000:
         return 0.45
     if candidates <= 20000:
+        avg_p = 0.0
+        p_count = 0
+        for candidate_list in problem.by_mask.values():
+            for cand in candidate_list:
+                avg_p += cand.p
+                p_count += 1
+        if p_count:
+            avg_p /= p_count
+        if tasks >= 25 and (avg_p < 0.16 or len(problem.all_couriers) < tasks):
+            return 7.0
         return 0.80
     return DEFAULT_TIME_LIMIT
 
