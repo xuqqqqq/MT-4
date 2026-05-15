@@ -1094,6 +1094,12 @@ def solve(input_text: str) -> list:
             )
         consider_state(sparse_state)
 
+    if len(problem.all_couriers) < problem.n_tasks:
+        for alpha in (10.0, 25.0, 50.0, 75.0):
+            if time.time() >= group_deadline:
+                break
+            consider(_make_courier_greedy_grouping(problem, alpha), "seq")
+
     # Pair-heavy groupings matter when couriers are scarce, because one courier
     # can cover two tasks and avoid the 100-point failure penalty for both.
     seed = 17

@@ -182,4 +182,12 @@ Known stable-ish score profile:
 - Hypothesis: the 719 baseline still uses only a `0.80s` internal budget for medium-sized low-willingness and scarce-courier cases; giving only these two identifiable families more local-search time can improve the two dominant remaining penalties without perturbing large/high/medium.
 - Code change: in `_time_budget()`, for `tasks >= 25`, `candidate_count <= 20000`, and either average willingness below `0.16` or fewer couriers than tasks, return `7.0s`; all other budgets stay unchanged.
 - Local evidence: generated `low_willingness_seed501` improved under the 719 model from about `1589/1545` prop/seq to `1497/1453`; generated `scarce_couriers_seed401` improved from about `1624/1530` to `1605/1505`.
-- Risk: local model is still not perfectly predictive, but this branch is tightly gated to the two online shortfalls and leaves strong cases on the exact 719 path.
+- Online evidence: average stayed exactly `719.61`; low and scarce scores did not move, so extra time alone is not a useful lever.
+- Lesson: keep the budget only as headroom for structural scarce/low candidates; do not submit further time-only changes.
+
+## Active Experiment: Scarce Courier-Aware Pair Seed
+
+- Hypothesis: `scarce_couriers_seed401` is a grouping/coverage issue, not a runtime issue. The 719 solver defines `_make_courier_greedy_grouping()` but never calls it; adding it as one more scarce-only seed can import the old pair-heavy/courier-aware behavior without reviving old broad repair.
+- Code change: when `len(all_couriers) < n_tasks`, consider `_make_courier_greedy_grouping()` for alpha `10/25/50/75` under the exact `seq` model before the standard pair-threshold loop.
+- Local evidence: on generated scarce, `_make_courier_greedy_grouping(alpha=50, seq)` improves the 719 seq proxy from about `1505` to `1483`, while the branch is not called for large/high/medium/low/small/tiny.
+- Risk: hidden scarce may still differ from the generator, but this is a candidate-generation change tightly gated to the observed `39/40` shortfall.
