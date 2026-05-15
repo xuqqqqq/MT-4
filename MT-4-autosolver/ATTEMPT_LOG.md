@@ -202,3 +202,13 @@ Known stable-ish score profile:
 - Local evidence: generated hidden-like low improved from `seq=1544.972 / prop=1589.023` to `seq=1467.012 / prop=1546.973`; generated high-noise, large, medium, scarce, small, and tiny outputs stayed hash-identical except scarce spent extra time without changing local output.
 - Guardrail: true provided `large_seed301.txt` stayed hash-identical to the 719 baseline across 3 runs with `prop=667.084`, so the low classifier did not leak into the dense public large case.
 - Risk: online low may not match the local low generator; scarce repartition may remain a no-op if the hidden issue is final ranking rather than decomposition.
+- Online evidence: average moved only from `719.61` to `719.50`; low improved `1806.07 -> 1804.94`, while scarce and every other case stayed unchanged.
+- Lesson: the low gate is real and safe, but hard-switching low final selection to `seq` is too weak. The online scorer aligns closely with local `prop` on the provided `large_seed301`, so the next attempt should treat prop as the final penalty selector while still using seq as a candidate generator.
+
+## Active Experiment: Prop-Aligned Final Selector for Low and Scarce
+
+- Hypothesis: the leaderboard penalty is closer to `_prop_expected_value()` than the scalar sequential surrogate; the provided `large_seed301.txt` online score `667.11` matches local `prop=667.084`, not local `seq=626.165`. Low/scarce can still use seq candidates, but final selection should prefer prop when coverage does not fall.
+- Code change: low-like cases now keep the 2-offer grouping candidates but return to the normal prop final selector. Scarce-like cases generate a prop shadow assignment for the same scarce groupings and may select it only when it does not reduce coverage; a bounded coverage override remains only if extra coverage costs at most `40` prop points.
+- Local evidence: relative to `9886d7c`, generated hidden-like low changed from `prop=1509.587` to `1496.676`; generated scarce changed from `prop=1624.352` to `1611.459` with the same `40/40` coverage; high-noise, large, medium, small, and tiny output hashes stayed unchanged.
+- Guardrail: true provided `large_seed301.txt` stayed hash-identical across 3 runs with `prop=667.084`.
+- Risk: if hidden scarce is scored closer to seq than prop, the prop shadow can worsen scarce despite preserving coverage. Online large evidence makes this risk acceptable for one targeted probe.
