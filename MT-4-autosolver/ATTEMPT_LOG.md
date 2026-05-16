@@ -231,3 +231,11 @@ Known stable-ish score profile:
 - Code change: add one deterministic seed only when `avg_willingness < 0.16`, the case is non-scarce, and `n_tasks <= 32`. The seed uses `mode="expected"`, `noise=0.0`, and the existing `consider()` incumbent check; no time budget, sparse, LNS, cache, or potential top-K path changes.
 - Local evidence: official `large_seed301` stayed hash-identical across 5 runs (`c0e34c37`, local `prop=667.084`); generated high-noise, large, medium, scarce, small, and tiny output hashes stayed unchanged. Generated `low_willingness_seed501` changed from local `prop=1589.120` to `1548.207`.
 - Risk: the local low generator remains only a guardrail, not a judge proxy. This is still a reasonable next submission candidate because the branch is narrow and uses an existing global matching constructor instead of another tail-polish tweak.
+- Online evidence: average remained `715.57`; `low_willingness_seed501` stayed `1806.07`, so the expected matching seed did not move the real low case. The best visible opportunity is now `scarce_couriers_seed401=1562.89` with only `39/40` covered.
+
+## Active Experiment: Scarce Uncovered-Task Pair Augment
+
+- Hypothesis: the remaining scarce miss may be an uncovered task that can be pulled into an already selected single-task courier as a pair. Existing repartition only rearranges selected groups and cannot introduce a task that is absent from the current state.
+- Code change: add `_local_cover_uncovered_expected()`, a scarce-focused postprocessor that tries adding missing groups with free couriers and replacing selected single-task offers by the same courier's pair offer. It only accepts changes that improve the active expected model; it does not force coverage at a worse model score.
+- Local evidence: compile/tests and Python 3.5/3.6 AST pass. Generated scarce is already `40/40`, so this patch intentionally leaves local hidden-like hashes unchanged; it is aimed at the observed online `39/40` structure rather than the generator.
+- Rejected: re-enable `_beam_sparse_assignment()` | current local probe makes generated scarce much worse (`+128` to `+139` under seq), matching earlier online lessons that sparse beam is not the right lever.

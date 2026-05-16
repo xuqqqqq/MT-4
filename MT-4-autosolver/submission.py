@@ -1039,6 +1039,110 @@ def _local_replace_sparse(problem, state, deadline):
     return current
 
 
+def _local_cover_uncovered_expected(problem, state, deadline, model):
+    current = [list(offers) for offers in state if offers]
+    if not current:
+        return current
+
+    current_value = _state_model_value(problem, current, model)
+
+    while time.time() < deadline:
+        used_tasks = 0
+        used_couriers = set()
+        for offers in current:
+            if not offers:
+                continue
+            used_tasks |= offers[0].mask
+            for cand in offers:
+                used_couriers.add(cand.courier)
+
+        uncovered = problem.all_task_mask & ~used_tasks
+        if not uncovered:
+            break
+
+        improved = False
+
+        # If any courier is still free, try adding a missing single/pair group.
+        base_state = [list(offers) for offers in current]
+        for mask, candidates in problem.by_mask.items():
+            if time.time() >= deadline:
+                break
+            if mask & used_tasks:
+                continue
+            if mask & uncovered != mask:
+                continue
+            for cand in candidates:
+                if cand.courier in used_couriers:
+                    continue
+                trial = base_state + [[cand]]
+                trial_value = _state_model_value(problem, trial, model)
+                if trial_value + 1e-9 < current_value:
+                    current = trial
+                    current_value = trial_value
+                    improved = True
+                    break
+            if improved:
+                break
+        if improved:
+            continue
+
+        # More often in scarce cases all couriers are already used.  Replace an
+        # existing single-task offer by the same courier's pair offer when that
+        # pulls in an uncovered task and improves the active expected model.
+        for group_index, offers in enumerate(current):
+            if time.time() >= deadline:
+                break
+            if not offers:
+                continue
+            old_mask = offers[0].mask
+            old_bits = _bits(old_mask)
+            if len(old_bits) != 1:
+                continue
+
+            base = []
+            base_couriers = set()
+            base_tasks = 0
+            for idx, other in enumerate(current):
+                if idx == group_index:
+                    continue
+                base.append(list(other))
+                base_tasks |= other[0].mask
+                for cand in other:
+                    base_couriers.add(cand.courier)
+
+            missing = uncovered
+            while missing:
+                bit = missing & -missing
+                missing -= bit
+                new_mask = old_mask | bit
+                if new_mask not in problem.by_mask or (new_mask & base_tasks):
+                    continue
+                for old_cand in offers:
+                    if old_cand.courier in base_couriers:
+                        continue
+                    for cand in problem.by_mask.get(new_mask, []):
+                        if cand.courier != old_cand.courier:
+                            continue
+                        trial = base + [[cand]]
+                        trial_value = _state_model_value(problem, trial, model)
+                        if trial_value + 1e-9 < current_value:
+                            current = trial
+                            current_value = trial_value
+                            improved = True
+                            break
+                    if improved:
+                        break
+                if improved:
+                    break
+            if improved:
+                break
+
+        if not improved:
+            break
+
+    return current
+
+
 def _local_replace_sparse_pair(problem, state, deadline):
     current = [list(offers) for offers in state if offers]
     current_value = _prop_expected_value(problem, current)
@@ -1721,6 +1825,13 @@ def solve(input_text: str) -> list:
             sparse_state = _local_replace_sparse(
                 problem, sparse_state, sparse_deadline
             )
+        if time.time() < deadline:
+            sparse_cover_deadline = min(
+                deadline, start_time + max(0.08, time_budget * 0.35)
+            )
+            sparse_state = _local_cover_uncovered_expected(
+                problem, sparse_state, sparse_cover_deadline, target_model
+            )
         consider_state(sparse_state)
 
     # Pair-heavy groupings matter when couriers are scarce, because one courier
@@ -1778,6 +1889,14 @@ def solve(input_text: str) -> list:
             best[1] = improved_state
     if time.time() < deadline:
         improved_state = _local_improve_expected(problem, best[1], deadline, target_model)
+        improved_value = _state_model_value(problem, improved_state, target_model)
+        if improved_value < best[0]:
+            best[0] = improved_value
+            best[1] = improved_state
+    if scarce_couriers and time.time() < deadline:
+        improved_state = _local_cover_uncovered_expected(
+            problem, best[1], deadline, target_model
+        )
         improved_value = _state_model_value(problem, improved_state, target_model)
         if improved_value < best[0]:
             best[0] = improved_value
