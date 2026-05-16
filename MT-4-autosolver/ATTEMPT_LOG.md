@@ -239,3 +239,11 @@ Known stable-ish score profile:
 - Code change: add `_local_cover_uncovered_expected()`, a scarce-focused postprocessor that tries adding missing groups with free couriers and replacing selected single-task offers by the same courier's pair offer. It only accepts changes that improve the active expected model; it does not force coverage at a worse model score.
 - Local evidence: compile/tests and Python 3.5/3.6 AST pass. Generated scarce is already `40/40`, so this patch intentionally leaves local hidden-like hashes unchanged; it is aimed at the observed online `39/40` structure rather than the generator.
 - Rejected: re-enable `_beam_sparse_assignment()` | current local probe makes generated scarce much worse (`+128` to `+139` under seq), matching earlier online lessons that sparse beam is not the right lever.
+- Online evidence: average remained `715.57`; `scarce_couriers_seed401` stayed `1562.89` and `39/40`. The scalar-improvement-only acceptance was still too conservative, so this was an online no-op.
+
+## Active Experiment: Scarce Coverage-First Selector
+
+- Hypothesis: scarce candidates that cover all 40 tasks may already be generated but discarded by the single `seq/prop` scalar selector. The visible judge reports `39/40`, so for scarce large cases the solver should first preserve deterministic coverage, then use the existing expected scalar as the tie-break.
+- Code change: add `_state_selection_key()` and use `coverage_first` only when `scarce_couriers` and `n_tasks >= 25`. `consider()`, `consider_state()`, local improvement retention, and `_local_cover_uncovered_expected()` now share this gate. Non-scarce large/medium/high/low cases keep the old scalar selector.
+- Local evidence: compile/tests and Python 3.5/3.6 AST pass. Official `large_seed301` stayed hash-identical across 5 runs (`c0e34c37`, local `prop=667.084`). Generated hidden-like cases stayed unchanged except the prior low-only seed.
+- Risk: if the hidden scarce scorer truly prefers a 39-task lower expected penalty over a 40-task higher expected penalty, this can worsen scarce. It is still the first change that directly addresses the observed `39/40` selection bottleneck rather than adding another no-op seed.

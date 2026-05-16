@@ -359,6 +359,35 @@ def _state_total_score(state):
     return total
 
 
+def _state_covered_count(state):
+    mask = 0
+    for offers in state:
+        if offers:
+            mask |= offers[0].mask
+    return _bit_count(mask)
+
+
+def _state_offer_count(state):
+    count = 0
+    for offers in state:
+        count += len(offers)
+    return count
+
+
+def _state_selection_key(problem, state, model, coverage_first):
+    value = _state_model_value(problem, state, model)
+    if value >= 1e90:
+        return (-1, -1e100, -1e100, -1e100)
+    if coverage_first:
+        return (
+            _state_covered_count(state),
+            -value,
+            -_state_total_score(state),
+            -_state_offer_count(state),
+        )
+    return (-value, 0.0, 0.0, 0.0)
+
+
 def _official_expected_value(problem, state):
     value = 0.0
     covered = 0
@@ -1039,12 +1068,12 @@ def _local_replace_sparse(problem, state, deadline):
     return current
 
 
-def _local_cover_uncovered_expected(problem, state, deadline, model):
+def _local_cover_uncovered_expected(problem, state, deadline, model, coverage_first=False):
     current = [list(offers) for offers in state if offers]
     if not current:
         return current
 
-    current_value = _state_model_value(problem, current, model)
+    current_key = _state_selection_key(problem, current, model, coverage_first)
 
     while time.time() < deadline:
         used_tasks = 0
@@ -1075,10 +1104,10 @@ def _local_cover_uncovered_expected(problem, state, deadline, model):
                 if cand.courier in used_couriers:
                     continue
                 trial = base_state + [[cand]]
-                trial_value = _state_model_value(problem, trial, model)
-                if trial_value + 1e-9 < current_value:
+                trial_key = _state_selection_key(problem, trial, model, coverage_first)
+                if trial_key > current_key:
                     current = trial
-                    current_value = trial_value
+                    current_key = trial_key
                     improved = True
                     break
             if improved:
@@ -1124,10 +1153,12 @@ def _local_cover_uncovered_expected(problem, state, deadline, model):
                         if cand.courier != old_cand.courier:
                             continue
                         trial = base + [[cand]]
-                        trial_value = _state_model_value(problem, trial, model)
-                        if trial_value + 1e-9 < current_value:
+                        trial_key = _state_selection_key(
+                            problem, trial, model, coverage_first
+                        )
+                        if trial_key > current_key:
                             current = trial
-                            current_value = trial_value
+                            current_key = trial_key
                             improved = True
                             break
                     if improved:
@@ -1764,6 +1795,7 @@ def solve(input_text: str) -> list:
     group_deadline = start_time + max(0.06, time_budget * 0.25)
 
     best = [1e100, None]
+    best_key = [None]
     tried = set()
     target_model = "prop" if len(problem.all_couriers) >= problem.n_tasks else "seq"
     avg_willingness = 0.0
@@ -1774,6 +1806,24 @@ def solve(input_text: str) -> list:
             willingness_count += 1
     if willingness_count:
         avg_willingness /= willingness_count
+    scarce_couriers = len(problem.all_couriers) <= problem.n_tasks * 1.35
+    low_willingness = avg_willingness < 0.35
+    coverage_first = scarce_couriers and problem.n_tasks >= 25
+
+    def maybe_keep_state(state):
+        if state is None:
+            return
+        value = _state_model_value(problem, state, target_model)
+        if coverage_first:
+            key = _state_selection_key(problem, state, target_model, True)
+            if best_key[0] is None or key > best_key[0]:
+                best_key[0] = key
+                best[0] = value
+                best[1] = state
+            return
+        if value < best[0]:
+            best[0] = value
+            best[1] = state
 
     def consider(groups, model=None, ensure_initial=True):
         if model is None:
@@ -1784,24 +1834,16 @@ def solve(input_text: str) -> list:
             return
         tried.add(key)
         state = _greedy_expected_assignment(problem, groups, model, ensure_initial)
-        value = _state_model_value(problem, state, target_model)
-        if value < best[0]:
-            best[0] = value
-            best[1] = state
+        maybe_keep_state(state)
 
     def consider_state(state):
-        value = _state_model_value(problem, state, target_model)
-        if value < best[0]:
-            best[0] = value
-            best[1] = state
+        maybe_keep_state(state)
 
     # The single-task grouping is very strong when there are many couriers,
     # because the official score charges expected cost, not raw offer count.
     consider(_all_single_grouping(problem))
     forced_pair_groups = _make_forced_pair_grouping(problem)
     consider(forced_pair_groups, target_model)
-    scarce_couriers = len(problem.all_couriers) <= problem.n_tasks * 1.35
-    low_willingness = avg_willingness < 0.35
 
     if scarce_couriers or low_willingness:
         consider(forced_pair_groups, "seq")
@@ -1830,7 +1872,7 @@ def solve(input_text: str) -> list:
                 deadline, start_time + max(0.08, time_budget * 0.35)
             )
             sparse_state = _local_cover_uncovered_expected(
-                problem, sparse_state, sparse_cover_deadline, target_model
+                problem, sparse_state, sparse_cover_deadline, target_model, coverage_first
             )
         consider_state(sparse_state)
 
@@ -1883,24 +1925,15 @@ def solve(input_text: str) -> list:
         improved_state = _local_repartition_expected(
             problem, best[1], min(deadline, repartition_deadline), target_model
         )
-        improved_value = _state_model_value(problem, improved_state, target_model)
-        if improved_value < best[0]:
-            best[0] = improved_value
-            best[1] = improved_state
+        maybe_keep_state(improved_state)
     if time.time() < deadline:
         improved_state = _local_improve_expected(problem, best[1], deadline, target_model)
-        improved_value = _state_model_value(problem, improved_state, target_model)
-        if improved_value < best[0]:
-            best[0] = improved_value
-            best[1] = improved_state
+        maybe_keep_state(improved_state)
     if scarce_couriers and time.time() < deadline:
         improved_state = _local_cover_uncovered_expected(
-            problem, best[1], deadline, target_model
+            problem, best[1], deadline, target_model, coverage_first
         )
-        improved_value = _state_model_value(problem, improved_state, target_model)
-        if improved_value < best[0]:
-            best[0] = improved_value
-            best[1] = improved_state
+        maybe_keep_state(improved_state)
     if (
         time.time() < deadline
         and problem.n_tasks <= 35
@@ -1909,16 +1942,12 @@ def solve(input_text: str) -> list:
         improved_state = _local_repartition_three_expected(
             problem, best[1], deadline, target_model
         )
-        improved_value = _state_model_value(problem, improved_state, target_model)
-        if improved_value < best[0]:
-            best[0] = improved_value
-            best[1] = improved_state
+        old_state = best[1]
+        maybe_keep_state(improved_state)
+        if best[1] is not old_state:
             if time.time() < deadline:
                 improved_state = _local_improve_expected(
                     problem, best[1], deadline, target_model
                 )
-                improved_value = _state_model_value(problem, improved_state, target_model)
-                if improved_value < best[0]:
-                    best[0] = improved_value
-                    best[1] = improved_state
+                maybe_keep_state(improved_state)
     return _state_to_output(best[1])
