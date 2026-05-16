@@ -45,6 +45,17 @@ Useful algorithm families from that framing:
   stuck.
 - Matheuristic exact repair on a small destroyed neighborhood.
 
+External-method checkpoints:
+
+- HeurAgenix motivates the offline loop: generate candidate heuristics, evaluate
+  them on a benchmark battery, and only then promote them to the online path.
+- Very-large-scale / variable-neighborhood GAP heuristics point to destroying a
+  small assignment neighborhood and approximately resolving that subproblem,
+  rather than adding more one-edge swaps.
+- Constrained-submodular greedy-local-search results support using marginal
+  gains for multi-offer additions, but also warn that fixed greedy order alone
+  can get stuck under matroid-like courier/task conflicts.
+
 ## Current Empirical Lessons
 
 - Local generated cases are guardrails, not online score proxies.  Several
@@ -75,3 +86,31 @@ Useful algorithm families from that framing:
 - Try ejection-chain repair for scarce cases where one uncovered task can enter
   only if a chain of pair/single replacements makes room.
 - Keep all experiments logged through `scripts/run_official_benchmarks.py`.
+
+## Calibrated Hidden-Like Suite
+
+`scripts/calibrate_hidden_like_cases.py` searches row-level transforms for the
+generated hidden-like cases so the current online-proven solver lands closer to
+the observed leaderboard scores.  It writes:
+
+- `outputs/calibrated_hidden_like_cases/*.txt`
+- `outputs/calibrated_hidden_like_cases/summary.csv`
+- `outputs/calibrated_hidden_like_cases/summary.json`
+
+First calibration pass with 8 trials per case:
+
+- `large_seed301` is anchored by the provided public input and matches online:
+  local `667.084` versus online `667.11`.
+- `medium_seed201` calibrated tightly: local `499.193` versus online `488.30`.
+- `large_seed302` is closer but still high: local `677.269` versus online
+  `635.51`.
+- `low_willingness_seed501`, `scarce_couriers_seed401`, `high_noise_seed601`,
+  `small_seed100`, and `tiny_seed42` still need structural generator changes,
+  not just score/probability scaling.
+- Repeated benchmark runs show that some calibrated cases are time/order
+  sensitive: `large_seed302` produced three different output hashes in three
+  repeats, while `medium_seed201` was stable.  Future comparisons should report
+  repeat min/median/max for shaky cases instead of trusting a single run.
+- `scripts/run_official_benchmarks.py` now writes
+  `outputs/official_benchmarks/repeat_stats.csv/json` to make that variance
+  visible by default.

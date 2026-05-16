@@ -266,3 +266,12 @@ Known stable-ish score profile:
 - Risk: prior low-willingness local proxy improvements have often failed online. This version is still narrower than the reverted potential/top-k branch because it is deterministic, low-only, and candidate-only; if online low does not improve or large moves, revert this block.
 - Online evidence: average stayed exactly `715.57`; every case score was unchanged, including `low_willingness_seed501=1806.07`. The branch likely executed because low runtime increased to `5613ms`, but hidden low candidates were rejected by the incumbent selector or did not match the generated low proxy.
 - Decision: revert the potential matching seed block. Do not add more low grouping seeds without a way to force a meaningfully different hidden output and a sharper online-risk rationale.
+
+## Active Experiment: Calibrated Hidden-Like Validation Suite
+
+- Hypothesis: repeated online no-ops are caused by optimizing synthetic cases whose score/coverage distribution does not resemble the hidden leaderboard cases.
+- Code change: add `scripts/calibrate_hidden_like_cases.py`, an offline-only row-transform search that keeps `submission.py` unchanged and writes calibrated TSVs plus a summary under `outputs/calibrated_hidden_like_cases`.
+- Local evidence: compile and Python 3.5/3.6 AST checks passed. With 8 trials per case, the public `large_seed301` anchor matched online (`667.084` local vs `667.11` online), `medium_seed201` moved close to its online target (`499.193` local vs `488.30` online), and `large_seed302` moved closer (`677.269` vs `635.51`). Low/scarce/high-noise/small/tiny still show large gaps, proving they need structural generator/algorithm changes rather than simple score/probability scaling.
+- Online evidence: not submitted; this is a research harness only.
+- Decision: keep as a guardrail before the next `submission.py` change.
+- Lesson: do not treat a local improvement as meaningful unless it survives the public large anchor and at least one calibrated hidden-like suite, while also respecting the no-repeat list.

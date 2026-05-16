@@ -122,6 +122,17 @@ Run attribution-friendly official TSV benchmarks before using online attempts:
 python scripts/run_official_benchmarks.py --solver submission.py --repeat 3 --extra-case outputs/official_large_seed301_copy.txt
 ```
 
+The benchmark writes per-run rows plus repeat min/median/max summaries in
+`outputs/official_benchmarks/summary.*` and
+`outputs/official_benchmarks/repeat_stats.*`.
+
+Calibrate generated hidden-like cases against the observed online score table:
+
+```powershell
+python scripts/calibrate_hidden_like_cases.py --solver submission.py --trials 8
+python scripts/run_official_benchmarks.py --solver submission.py --case-dir outputs/calibrated_hidden_like_cases --extra-case outputs/official_large_seed301_copy.txt
+```
+
 Research notes and no-repeat lessons are tracked in
 [docs/research_notes.md](docs/research_notes.md).
 

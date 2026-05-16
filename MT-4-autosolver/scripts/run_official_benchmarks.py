@@ -108,6 +108,8 @@ def main(argv=None):
 
     csv_path = out_dir / "summary.csv"
     json_path = out_dir / "summary.json"
+    stats_path = out_dir / "repeat_stats.csv"
+    stats_json_path = out_dir / "repeat_stats.json"
     if rows:
         with csv_path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
@@ -116,9 +118,70 @@ def main(argv=None):
         with json_path.open("w", encoding="utf-8") as handle:
             json.dump(rows, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
+        stats = build_repeat_stats(rows)
+        with stats_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(stats[0]) if stats else [])
+            if stats:
+                writer.writeheader()
+                writer.writerows(stats)
+        with stats_json_path.open("w", encoding="utf-8") as handle:
+            json.dump(stats, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        for item in stats:
+            if item["repeat_count"] > 1:
+                print(
+                    "STATS {solver:24s} {case:28s} "
+                    "prop_min={prop_min:9.3f} prop_med={prop_median:9.3f} prop_max={prop_max:9.3f} "
+                    "hashes={hash_count:2d}".format(**item)
+                )
     print("wrote {}".format(csv_path))
     print("wrote {}".format(json_path))
+    print("wrote {}".format(stats_path))
+    print("wrote {}".format(stats_json_path))
     return 0
+
+
+def build_repeat_stats(rows):
+    grouped = {}
+    for row in rows:
+        key = (row["solver"], row["case"])
+        grouped.setdefault(key, []).append(row)
+
+    stats = []
+    for key in sorted(grouped):
+        solver, case = key
+        group = grouped[key]
+        props = sorted(float(item["prop_penalty"]) for item in group)
+        seqs = sorted(float(item["seq_penalty"]) for item in group)
+        times = sorted(float(item["elapsed_ms"]) for item in group)
+        hashes = sorted(set(item["output_hash"][:8] for item in group))
+        stats.append(
+            {
+                "solver": solver,
+                "case": case,
+                "repeat_count": len(group),
+                "prop_min": round(props[0], 6),
+                "prop_median": round(median(props), 6),
+                "prop_max": round(props[-1], 6),
+                "seq_min": round(seqs[0], 6),
+                "seq_median": round(median(seqs), 6),
+                "seq_max": round(seqs[-1], 6),
+                "time_min_ms": round(times[0], 3),
+                "time_median_ms": round(median(times), 3),
+                "time_max_ms": round(times[-1], 3),
+                "hash_count": len(hashes),
+                "hashes": " ".join(hashes[:12]),
+            }
+        )
+    return stats
+
+
+def median(values):
+    count = len(values)
+    middle = count // 2
+    if count % 2:
+        return values[middle]
+    return 0.5 * (values[middle - 1] + values[middle])
 
 
 def resolve_cases(root, explicit_cases, case_dir, extra_cases):
