@@ -212,3 +212,14 @@ Known stable-ish score profile:
 - Local evidence: relative to `9886d7c`, generated hidden-like low changed from `prop=1509.587` to `1496.676`; generated scarce changed from `prop=1624.352` to `1611.459` with the same `40/40` coverage; high-noise, large, medium, small, and tiny output hashes stayed unchanged.
 - Guardrail: true provided `large_seed301.txt` stayed hash-identical across 3 runs with `prop=667.084`.
 - Risk: if hidden scarce is scored closer to seq than prop, the prop shadow can worsen scarce despite preserving coverage. Online large evidence makes this risk acceptable for one targeted probe.
+- Online evidence: average regressed to `719.77`; `large_seed301` worsened from `667.11` to `668.72`, low returned to `1806.07`, and scarce stayed unchanged. The local prop-selector signal was another generator trap.
+- Decision: abandon this selector branch and restore an online-proven `715.57` baseline.
+- Status: failed online, code replaced.
+
+## Active Experiment: Adopt 715.57 Reference Solver
+
+- Trigger: user provided `solution_715.57.py`, an online-scored reference around `715.57`.
+- Hypothesis: the stable improvements are not broad low/scarce selector changes, but a conservative 719-family solver with local expected repartition and bounded three-group finishing while avoiding the unstable low/scarce calls.
+- Code change: replace `submission.py` with the provided `715.57` solver. It keeps the 719 target-model rule, restores conservative sparse handling for scarce-like cases, and adds `_local_repartition_expected()` plus `_local_repartition_three_expected()`.
+- Local evidence: provided `large_seed301.txt` stays hash-identical to the 719 baseline with local `prop=667.084`; generated hidden-like cases are mostly unchanged, confirming local proxies do not explain the online `715.57` gain.
+- Lesson: online evidence dominates synthetic proxies. Use this as the new floor before attempting further changes.
