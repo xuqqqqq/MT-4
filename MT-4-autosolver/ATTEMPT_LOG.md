@@ -295,3 +295,12 @@ Known stable-ish score profile:
 - Risk: prior potential matching seeds were an online no-op; this narrower threshold may still be a no-op if hidden low differs from the calibrated probe.
 - Online evidence: average stayed `715.57`; `low_willingness_seed501` stayed `1806.07`, and all other case scores matched the 715 baseline. The local calibrated low case is not a reliable proxy for the true low hidden case.
 - Decision: reverted from `submission.py`; do not add more low-only potential matching thresholds unless there is a new signal beyond synthetic score scale.
+
+## Active Experiment: Medium-Scale Pair/Single Beam Grouping
+
+- Hypothesis: the 715 solver's next useful jump is not another low/scarce seed, but escaping the greedy pair-matching basin for 25-32 task non-scarce cases. A bounded beam over pair/single task partitions can expose alternative grouping basins before the usual expected allocator and local repair compress candidates to one incumbent.
+- Code change: add `_make_beam_grouping()`, a deterministic set-packing-style beam over pair/single masks using first-offer pair gain. It is gated to non-scarce `25 <= n_tasks <= 32`, tries the most useful thresholds first (`pair_gain` 0/10 before wider negatives), and leaves 40-task large and scarce paths untouched. Also give this medium-scale gate a 1.20s minimum local budget so short synthetic cases actually exercise the beam; online hidden medium/high/low cases already run in the multi-second path.
+- Local evidence: public `large_seed301` remained hash-identical across 3 repeats (`5dadeb7a`, local `prop=667.084`). On calibrated cases, `high_noise_seed601` improved from `359.642` to `346.996`, `low_willingness_seed501` improved from `1548.207` to `1532.376`, and `medium_seed201` improved from `499.193` to `492.067`; `medium_seed202`, `medium_seed203`, and scarce stayed unchanged. Calibrated `large_seed302` still has pre-existing time-order jitter, but the new gate excludes 40-task large cases.
+- Rejected: fixed-group multi-offer beam and layer matching | offline upper-bound tests made low cases worse than the current greedy allocator, so the bottleneck is grouping, not extra-offer allocation.
+- Risk: online high/low/medium distributions may reject the new beam state the same way previous low seeds were rejected. This attempt is still structurally different because it searches task partitions globally and improves three calibrated families while preserving the public large anchor.
+- Decision: next online candidate if full tests pass and desktop submission is synced.

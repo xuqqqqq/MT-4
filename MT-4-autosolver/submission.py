@@ -655,6 +655,86 @@ def _make_expected_grouping(problem, mode, threshold, noise, seed):
     return _groups_key(groups)
 
 
+def _make_beam_grouping(problem, mode, threshold, beam_width, max_options):
+    """Beam-search a pair/single task partition instead of greedy edge picking."""
+    single_saving = {}
+    for mask in problem.single_masks:
+        single_saving[mask] = _best_first_saving(problem, mask)
+
+    adjacency = [[] for _ in range(problem.n_tasks)]
+    for mask in problem.pair_masks:
+        pair_bits = _bits(mask)
+        if len(pair_bits) != 2:
+            continue
+        left = 1 << pair_bits[0]
+        right = 1 << pair_bits[1]
+        pair_saving = _best_first_saving(problem, mask)
+        if mode == "pair_gain":
+            value = pair_saving - single_saving.get(left, 0.0) - single_saving.get(right, 0.0)
+        elif mode == "pair_raw":
+            value = pair_saving
+        else:
+            value = pair_saving - 0.5 * (
+                single_saving.get(left, 0.0) + single_saving.get(right, 0.0)
+            )
+        if value < threshold:
+            continue
+        first, second = pair_bits
+        adjacency[first].append((value, mask, second))
+        adjacency[second].append((value, mask, first))
+
+    for idx in range(problem.n_tasks):
+        adjacency[idx].sort(reverse=True)
+        if len(adjacency[idx]) > max_options:
+            adjacency[idx] = adjacency[idx][:max_options]
+
+    full_mask = problem.all_task_mask
+    states = [(0.0, 0, ())]
+    for _ in range(problem.n_tasks):
+        next_states = []
+        complete_states = []
+        for value, used, groups in states:
+            remaining = full_mask & ~used
+            if not remaining:
+                complete_states.append((value, used, groups))
+                continue
+            first_bit = remaining & -remaining
+            first_idx = _bits(first_bit)[0]
+            if first_bit in problem.by_mask:
+                next_states.append((value, used | first_bit, groups + (first_bit,)))
+            for edge_value, pair_mask, _ in adjacency[first_idx]:
+                if used & pair_mask:
+                    continue
+                next_states.append(
+                    (value + edge_value, used | pair_mask, groups + (pair_mask,))
+                )
+
+        states = complete_states + next_states
+        if not states:
+            break
+
+        states.sort(key=lambda item: (-item[0], len(item[2]), item[1]))
+        compact = []
+        seen_used = set()
+        for state in states:
+            if state[1] in seen_used:
+                continue
+            seen_used.add(state[1])
+            compact.append(state)
+            if len(compact) >= beam_width:
+                break
+        states = compact
+
+        if states and all(not (full_mask & ~state[1]) for state in states):
+            break
+
+    complete = [state for state in states if not (full_mask & ~state[1])]
+    if not complete:
+        return _all_single_grouping(problem)
+    complete.sort(key=lambda item: (-item[0], len(item[2]), item[1]))
+    return _groups_key(complete[0][2])
+
+
 def _make_forced_pair_grouping(problem):
     pair_scores = []
     for mask in problem.pair_masks:
@@ -1914,6 +1994,13 @@ def solve(input_text: str) -> list:
         avg_willingness /= willingness_count
     scarce_couriers = len(problem.all_couriers) <= problem.n_tasks * 1.35
     low_willingness = avg_willingness < 0.35
+    strict_low_willingness = (
+        avg_willingness < 0.16 and not scarce_couriers and problem.n_tasks <= 32
+    )
+    if not scarce_couriers and 25 <= problem.n_tasks <= 32 and time_budget < 1.20:
+        time_budget = 1.20
+        deadline = start_time + time_budget
+        group_deadline = start_time + max(0.06, time_budget * 0.25)
     coverage_first = scarce_couriers and problem.n_tasks >= 25
 
     def maybe_keep_state(state):
@@ -1955,16 +2042,30 @@ def solve(input_text: str) -> list:
         consider(forced_pair_groups, "seq")
         consider(forced_pair_groups, "seq", False)
 
+    # Greedy pair selection can lock the solver into one matching basin.  This
+    # bounded beam keeps several global pair/single partitions and lets the
+    # expected allocator decide whether any of them beat the incumbent.
+    if not scarce_couriers and 25 <= problem.n_tasks <= 32:
+        beam_specs = (
+            ("pair_gain", (0.0, 10.0, -80.0, -40.0, 25.0)),
+            ("pair_half", (0.0, -80.0, -40.0)),
+        )
+        for mode, beam_thresholds in beam_specs:
+            for threshold in beam_thresholds:
+                if time.time() >= group_deadline:
+                    break
+                consider(_make_beam_grouping(problem, mode, threshold, 96, 14))
+            if time.time() >= group_deadline:
+                break
+
     # Low-willingness medium cases can need a globally consistent pair/single
     # decomposition. Keep this deterministic and use expected-value matching
     # only; do not reintroduce the unstable potential/top-k matching path.
-    if avg_willingness < 0.16 and not scarce_couriers and problem.n_tasks <= 32:
-        consider(
-            _make_matching_grouping(
-                problem, "expected", 0, 0.0, 0.0, 17, three_opt=True
-            ),
-            target_model,
+    if strict_low_willingness:
+        low_expected_groups = _make_matching_grouping(
+            problem, "expected", 0, 0.0, 0.0, 17, three_opt=True
         )
+        consider(low_expected_groups, target_model)
 
     if scarce_couriers:
         sparse_state = _candidate_saving_assignment(problem)
