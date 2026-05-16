@@ -257,3 +257,10 @@ Known stable-ish score profile:
 - Risk: if the model underestimates the expensive hidden 40/40 candidate by more than the bonus guard, this can still pick the bad 40/40 state. If that happens, revert to the pure scalar selector.
 - Online evidence: average returned to `715.57`; scarce reverted to `1562.89` and `39/40`. The 15-point bonus correctly rejected the expensive 40/40 candidate, but the cheap uncovered-task repartition did not find a new hidden improvement.
 - Lesson: stop pushing scarce coverage variants unless the candidate demonstrably lowers the scalar penalty. The useful online fact is that the hidden scorer prefers the current 39/40 over the available 40/40 by about `43.85` points.
+
+## Active Experiment: Low-Only Potential Matching Seeds
+
+- Hypothesis: the remaining low-willingness gap is pair decomposition, not fixed-group courier reassignment. The fixed-current-group beam found no local improvement, while deterministic top-k potential matching changes only the low-like grouping basin.
+- Code change: under the strict gate `avg_willingness < 0.16`, non-scarce, and `n_tasks <= 32`, add four deterministic `_make_matching_grouping()` candidates using `potential_half/top_k=6`, `potential/top_k=4`, `potential_half/top_k=5`, and `potential_gain/top_k=4`. Keep the current prop selector and do not change time budgets, sparse logic, scarce logic, random matching, or broad fanout.
+- Local evidence: official `large_seed301` stayed hash-identical across 5 runs (`520daa7e`, local `prop=667.084`). Compared with the provided `715.57` file, all generated non-low hidden-like cases stayed hash-identical; generated `low_willingness_seed501` improved under the local prop proxy from `1590.964` to `1462.274`.
+- Risk: prior low-willingness local proxy improvements have often failed online. This version is still narrower than the reverted potential/top-k branch because it is deterministic, low-only, and candidate-only; if online low does not improve or large moves, revert this block.

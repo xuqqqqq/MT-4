@@ -1965,6 +1965,30 @@ def solve(input_text: str) -> list:
             ),
             target_model,
         )
+        # The hidden low-willingness case is dominated by pair choice, not by
+        # reassigning couriers after the pairs are fixed.  Try a few deterministic
+        # top-k potential matchings as extra group candidates, but keep them under
+        # the narrow low-only gate and let the prop selector reject bad states.
+        potential_seed = 31
+        for potential_mode, top_k in (
+            ("potential_half", 6),
+            ("potential", 4),
+            ("potential_half", 5),
+            ("potential_gain", 4),
+        ):
+            consider(
+                _make_matching_grouping(
+                    problem,
+                    potential_mode,
+                    top_k,
+                    0.0,
+                    0.0,
+                    potential_seed,
+                    three_opt=True,
+                ),
+                target_model,
+            )
+            potential_seed += 13
 
     if scarce_couriers:
         sparse_state = _candidate_saving_assignment(problem)
