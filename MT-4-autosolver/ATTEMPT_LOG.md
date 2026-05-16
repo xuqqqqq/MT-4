@@ -223,3 +223,11 @@ Known stable-ish score profile:
 - Code change: replace `submission.py` with the provided `715.57` solver. It keeps the 719 target-model rule, restores conservative sparse handling for scarce-like cases, and adds `_local_repartition_expected()` plus `_local_repartition_three_expected()`.
 - Local evidence: provided `large_seed301.txt` stays hash-identical to the 719 baseline with local `prop=667.084`; generated hidden-like cases are mostly unchanged, confirming local proxies do not explain the online `715.57` gain.
 - Lesson: online evidence dominates synthetic proxies. Use this as the new floor before attempting further changes.
+
+## Active Experiment: Low-Only Expected Matching Seed
+
+- Hypothesis: after adopting the `715.57` floor, the safest remaining structural gap is low-willingness pair/single decomposition. The existing `_make_matching_grouping(..., "expected")` constructor globally matches pairs with 2-opt/3-pair repair, unlike the failed potential top-K and sparse replacement branches.
+- Discarded probe: applying the stable `_local_repartition_expected()` to several near-best states was tested locally and rejected before commit. It left official large unchanged but worsened the generated low case by about `+1.07`, so it was not a good online candidate.
+- Code change: add one deterministic seed only when `avg_willingness < 0.16`, the case is non-scarce, and `n_tasks <= 32`. The seed uses `mode="expected"`, `noise=0.0`, and the existing `consider()` incumbent check; no time budget, sparse, LNS, cache, or potential top-K path changes.
+- Local evidence: official `large_seed301` stayed hash-identical across 5 runs (`c0e34c37`, local `prop=667.084`); generated high-noise, large, medium, scarce, small, and tiny output hashes stayed unchanged. Generated `low_willingness_seed501` changed from local `prop=1589.120` to `1548.207`.
+- Risk: the local low generator remains only a guardrail, not a judge proxy. This is still a reasonable next submission candidate because the branch is narrow and uses an existing global matching constructor instead of another tail-polish tweak.

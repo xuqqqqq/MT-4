@@ -1703,6 +1703,17 @@ def solve(input_text: str) -> list:
         consider(forced_pair_groups, "seq")
         consider(forced_pair_groups, "seq", False)
 
+    # Low-willingness medium cases can need a globally consistent pair/single
+    # decomposition. Keep this deterministic and use expected-value matching
+    # only; do not reintroduce the unstable potential/top-k matching path.
+    if avg_willingness < 0.16 and not scarce_couriers and problem.n_tasks <= 32:
+        consider(
+            _make_matching_grouping(
+                problem, "expected", 0, 0.0, 0.0, 17, three_opt=True
+            ),
+            target_model,
+        )
+
     if scarce_couriers:
         sparse_state = _candidate_saving_assignment(problem)
         if time.time() < deadline:
