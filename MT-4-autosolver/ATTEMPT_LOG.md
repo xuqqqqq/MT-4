@@ -276,20 +276,22 @@ Known stable-ish score profile:
 - Decision: keep as a guardrail before the next `submission.py` change.
 - Lesson: do not treat a local improvement as meaningful unless it survives the public large anchor and at least one calibrated hidden-like suite, while also respecting the no-repeat list.
 
-## Active Experiment: Scarce Free-Courier Pair Replacement
+## Closed Experiment: Scarce Free-Courier Pair Replacement
 
 - Hypothesis: hidden scarce may miss one task because an uncovered order can enter only by replacing an already selected single-order group with a pair served by a different free courier. The existing uncovered repair only tried adding disjoint missing groups or upgrading the same courier's single to a pair.
 - Code change: extend `_local_cover_uncovered_expected()` with a scarce-safe replacement pattern: remove one selected single group, try `old_task + uncovered_task` pair candidates served by any courier not used by the remaining groups, and accept only if `_state_selection_key()` improves. This preserves the bounded coverage bonus and does not force an expensive 40/40 solution.
 - Local evidence: a new structurally sparse calibrated scarce probe reproduced the online-like shape (`39/40`, local `1540.606`). The new repair improved it to `40/40`, local `1524.018`, hash-stable across 3 repeats. The public `large_seed301` anchor stayed hash-identical across repeated runs (`5dadeb7a`, local `667.084`). The original easy hidden-like scarce stayed unchanged, confirming the branch is selective.
 - Verification: `python -m py_compile submission.py`; Python 3.5/3.6 AST parse; `python -m unittest discover -s tests -q`; benchmark repeat smoke on public large, calibrated suite, and sparse calibrated scarce probe.
 - Risk: online scarce may not contain this exact free-courier pair opportunity. If it does not, this should be a no-op; if it does, the acceptance gate requires expected-penalty improvement rather than coverage forcing.
-- Decision: keep as the next online candidate unless a broader benchmark shows a non-scarce hash change.
+- Online evidence: average stayed `715.57`; `scarce_couriers_seed401` stayed `1562.89` and `39/40`, and every other case stayed on the 715 baseline. The calibrated sparse probe was another synthetic trap.
+- Decision: reverted from `submission.py`; keep only the lesson that hidden scarce does not expose this free-courier pair opportunity.
 
-## Active Experiment: Low Potential-Gain Matching Threshold
+## Closed Experiment: Low Potential-Gain Matching Threshold
 
 - Hypothesis: previous low-only potential matching was too broad but missed a useful negative-threshold basin. A calibrated low probe now matches online scale (`1811.047` local vs `1806.07` online), and its best local grouping improvement is `_make_matching_grouping(..., "potential_gain", top_k=4, threshold=-10)`.
 - Code change: under the existing strict low gate (`avg_willingness < 0.16`, non-scarce, `n_tasks <= 32`), add exactly one deterministic `potential_gain/top_k=4/threshold=-10` matching candidate after the expected matching seed. Do not restore the earlier multi-seed potential portfolio.
 - Local evidence: calibrated low probe improved from `1811.047` to `1764.674`, stable across 3 repeats; the older generated low-like case improved from `1548.207` to `1522.507`. Public `large_seed301` stayed hash-identical (`5dadeb7a`, local `667.084`), and calibrated high/medium/small/tiny outputs stayed hash-identical in the combined benchmark.
 - Verification: `python -m py_compile submission.py`; Python 3.5/3.6 AST parse; `python -m unittest discover -s tests -q`; repeat benchmark on public large, calibrated low, sparse scarce, and calibrated suite.
 - Risk: prior potential matching seeds were an online no-op; this narrower threshold may still be a no-op if hidden low differs from the calibrated probe.
-- Decision: keep as a targeted low candidate unless online low stays unchanged or large/high moves.
+- Online evidence: average stayed `715.57`; `low_willingness_seed501` stayed `1806.07`, and all other case scores matched the 715 baseline. The local calibrated low case is not a reliable proxy for the true low hidden case.
+- Decision: reverted from `submission.py`; do not add more low-only potential matching thresholds unless there is a new signal beyond synthetic score scale.
