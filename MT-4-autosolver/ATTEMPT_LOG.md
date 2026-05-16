@@ -247,3 +247,11 @@ Known stable-ish score profile:
 - Code change: add `_state_selection_key()` and use `coverage_first` only when `scarce_couriers` and `n_tasks >= 25`. `consider()`, `consider_state()`, local improvement retention, and `_local_cover_uncovered_expected()` now share this gate. Non-scarce large/medium/high/low cases keep the old scalar selector.
 - Local evidence: compile/tests and Python 3.5/3.6 AST pass. Official `large_seed301` stayed hash-identical across 5 runs (`c0e34c37`, local `prop=667.084`). Generated hidden-like cases stayed unchanged except the prior low-only seed.
 - Risk: if the hidden scarce scorer truly prefers a 39-task lower expected penalty over a 40-task higher expected penalty, this can worsen scarce. It is still the first change that directly addresses the observed `39/40` selection bottleneck rather than adding another no-op seed.
+- Online evidence: average worsened to `719.96`; scarce became `40/40` but penalty worsened `1562.89 -> 1606.74`. The hidden scorer does not value deterministic coverage enough to justify a `+43.85` penalty increase.
+
+## Active Experiment: Bounded Scarce Coverage Bonus
+
+- Hypothesis: coverage should be a bounded bonus, not lexicographic. A 40/40 scarce solution is useful only if the expected-penalty tradeoff is small; otherwise keep the cheaper 39/40 incumbent.
+- Code change: replace lexicographic coverage-first with `SCARCE_COVERAGE_BONUS = 15.0` in `_state_selection_key()`. Add `_local_insert_uncovered_repartition()` to search for cheap 40/40 repairs by repartitioning an uncovered task together with one or two selected groups.
+- Local evidence: official `large_seed301` stayed hash-identical across 5 runs (`c0e34c37`, local `prop=667.084`); generated hidden-like cases stayed unchanged except the prior low-only seed. Compile/tests and Python 3.5/3.6 AST pass.
+- Risk: if the model underestimates the expensive hidden 40/40 candidate by more than the bonus guard, this can still pick the bad 40/40 state. If that happens, revert to the pure scalar selector.

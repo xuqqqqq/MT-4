@@ -24,6 +24,7 @@ WILLINGNESS_VALUE = 0.0
 DEFAULT_TIME_LIMIT = 5.50
 LOCAL_SEARCH_TIME_FRACTION = 0.35
 FAIL_PENALTY = 100.0
+SCARCE_COVERAGE_BONUS = 15.0
 THREE_PAIR_PATTERNS = (
     ((0, 1), (2, 3), (4, 5)),
     ((0, 1), (2, 4), (3, 5)),
@@ -377,15 +378,20 @@ def _state_offer_count(state):
 def _state_selection_key(problem, state, model, coverage_first):
     value = _state_model_value(problem, state, model)
     if value >= 1e90:
-        return (-1, -1e100, -1e100, -1e100)
+        return (-1, -1e100, -1e100, -1e100, -1e100)
     if coverage_first:
+        covered = _state_covered_count(state)
+        # Online feedback showed that a 40/40 scarce solution can be worse than
+        # a cheaper 39/40 solution, so coverage is a bounded bonus, not a
+        # lexicographic priority.
         return (
-            _state_covered_count(state),
+            SCARCE_COVERAGE_BONUS * covered - value,
+            covered,
             -value,
             -_state_total_score(state),
             -_state_offer_count(state),
         )
-    return (-value, 0.0, 0.0, 0.0)
+    return (-value, 0.0, 0.0, 0.0, 0.0)
 
 
 def _official_expected_value(problem, state):
@@ -1478,6 +1484,106 @@ def _local_repartition_expected(problem, state, deadline, model):
     return output
 
 
+def _local_insert_uncovered_repartition(
+    problem, state, deadline, model, coverage_first=False
+):
+    current = [list(offers) for offers in state if offers]
+    if len(current) < 1:
+        return current
+
+    current_key = _state_selection_key(problem, current, model, coverage_first)
+    rnd = random.Random(20260518)
+
+    while time.time() < deadline:
+        used_tasks = 0
+        for offers in current:
+            if offers:
+                used_tasks |= offers[0].mask
+        uncovered = problem.all_task_mask & ~used_tasks
+        if not uncovered:
+            break
+
+        moves = []
+        for i in range(len(current)):
+            moves.append((i,))
+        for i in range(len(current)):
+            for j in range(i + 1, len(current)):
+                moves.append((i, j))
+        rnd.shuffle(moves)
+
+        improved = False
+        missing = uncovered
+        while missing and not improved:
+            missing_bit = missing & -missing
+            missing -= missing_bit
+
+            for selected in moves:
+                if time.time() >= deadline:
+                    break
+
+                union_mask = missing_bit
+                local_couriers = []
+                old_groups = []
+                selected_set = set(selected)
+                base = []
+                for idx, offers in enumerate(current):
+                    if idx in selected_set:
+                        if not offers:
+                            continue
+                        union_mask |= offers[0].mask
+                        old_groups.append(offers[0].mask)
+                        for cand in offers:
+                            if cand.courier not in local_couriers:
+                                local_couriers.append(cand.courier)
+                    else:
+                        base.append(list(offers))
+
+                if not local_couriers:
+                    continue
+                if _bit_count(union_mask) > 2 * len(local_couriers):
+                    continue
+
+                alternatives = _enumerate_partitions(problem, union_mask)
+                alternatives.sort(key=lambda item: (len(item), item))
+                old_key = _groups_key(old_groups)
+
+                for alt_groups in alternatives:
+                    if alt_groups == old_key:
+                        continue
+                    if len(alt_groups) > len(local_couriers):
+                        continue
+                    local_state = _restricted_expected_assignment(
+                        problem, list(alt_groups), local_couriers, model
+                    )
+                    local_covered = 0
+                    for offers in local_state:
+                        if offers:
+                            local_covered |= offers[0].mask
+                    if local_covered != union_mask:
+                        continue
+
+                    trial = base + local_state
+                    trial_key = _state_selection_key(
+                        problem, trial, model, coverage_first
+                    )
+                    if trial_key > current_key:
+                        current = trial
+                        current_key = trial_key
+                        improved = True
+                        break
+                if improved:
+                    break
+
+        if not improved:
+            break
+
+    output = []
+    for offers in current:
+        if offers:
+            output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
+    return output
+
+
 def _local_repartition_three_expected(problem, state, deadline, model):
     current = [list(offers) for offers in state if offers]
     if len(current) < 3 or problem.n_tasks > 35:
@@ -1928,6 +2034,11 @@ def solve(input_text: str) -> list:
         maybe_keep_state(improved_state)
     if time.time() < deadline:
         improved_state = _local_improve_expected(problem, best[1], deadline, target_model)
+        maybe_keep_state(improved_state)
+    if scarce_couriers and time.time() < deadline:
+        improved_state = _local_insert_uncovered_repartition(
+            problem, best[1], deadline, target_model, coverage_first
+        )
         maybe_keep_state(improved_state)
     if scarce_couriers and time.time() < deadline:
         improved_state = _local_cover_uncovered_expected(
