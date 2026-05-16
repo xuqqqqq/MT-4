@@ -116,6 +116,15 @@ python -m autosolver --official-input large_seed301.txt --time-limit 9 --output 
 The contest-style entrypoint is [official_solver.py](official_solver.py), which
 defines `solve(input_text: str) -> list`.
 
+Run attribution-friendly official TSV benchmarks before using online attempts:
+
+```powershell
+python scripts/run_official_benchmarks.py --solver submission.py --repeat 3 --extra-case outputs/official_large_seed301_copy.txt
+```
+
+Research notes and no-repeat lessons are tracked in
+[docs/research_notes.md](docs/research_notes.md).
+
 Run tests:
 
 ```powershell
