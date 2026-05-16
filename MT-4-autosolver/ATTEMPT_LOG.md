@@ -284,3 +284,12 @@ Known stable-ish score profile:
 - Verification: `python -m py_compile submission.py`; Python 3.5/3.6 AST parse; `python -m unittest discover -s tests -q`; benchmark repeat smoke on public large, calibrated suite, and sparse calibrated scarce probe.
 - Risk: online scarce may not contain this exact free-courier pair opportunity. If it does not, this should be a no-op; if it does, the acceptance gate requires expected-penalty improvement rather than coverage forcing.
 - Decision: keep as the next online candidate unless a broader benchmark shows a non-scarce hash change.
+
+## Active Experiment: Low Potential-Gain Matching Threshold
+
+- Hypothesis: previous low-only potential matching was too broad but missed a useful negative-threshold basin. A calibrated low probe now matches online scale (`1811.047` local vs `1806.07` online), and its best local grouping improvement is `_make_matching_grouping(..., "potential_gain", top_k=4, threshold=-10)`.
+- Code change: under the existing strict low gate (`avg_willingness < 0.16`, non-scarce, `n_tasks <= 32`), add exactly one deterministic `potential_gain/top_k=4/threshold=-10` matching candidate after the expected matching seed. Do not restore the earlier multi-seed potential portfolio.
+- Local evidence: calibrated low probe improved from `1811.047` to `1764.674`, stable across 3 repeats; the older generated low-like case improved from `1548.207` to `1522.507`. Public `large_seed301` stayed hash-identical (`5dadeb7a`, local `667.084`), and calibrated high/medium/small/tiny outputs stayed hash-identical in the combined benchmark.
+- Verification: `python -m py_compile submission.py`; Python 3.5/3.6 AST parse; `python -m unittest discover -s tests -q`; repeat benchmark on public large, calibrated low, sparse scarce, and calibrated suite.
+- Risk: prior potential matching seeds were an online no-op; this narrower threshold may still be a no-op if hidden low differs from the calibrated probe.
+- Decision: keep as a targeted low candidate unless online low stays unchanged or large/high moves.

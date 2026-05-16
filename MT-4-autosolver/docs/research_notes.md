@@ -122,3 +122,8 @@ First calibration pass with 8 trials per case:
   a different courier that is free after removing the old group.  This improved
   one sparse calibrated scarce probe from local `1540.606` at `39/40` to
   `1524.018` at `40/40` without moving the public large anchor.
+- A calibrated low-willingness probe can now match the online scale: local
+  `1811.047` versus online `1806.07`.  On that probe, one narrow
+  `potential_gain/top_k=4/threshold=-10` matching candidate improves local prop
+  to `1764.674`; this is the first low change since the no-op potential bundle
+  with a better local target behind it.

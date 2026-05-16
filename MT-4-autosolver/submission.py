@@ -2017,6 +2017,12 @@ def solve(input_text: str) -> list:
             ),
             target_model,
         )
+        consider(
+            _make_matching_grouping(
+                problem, "potential_gain", 4, -10.0, 0.0, 29, three_opt=True
+            ),
+            target_model,
+        )
 
     if scarce_couriers:
         sparse_state = _candidate_saving_assignment(problem)
