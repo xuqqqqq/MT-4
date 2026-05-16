@@ -114,3 +114,11 @@ First calibration pass with 8 trials per case:
 - `scripts/run_official_benchmarks.py` now writes
   `outputs/official_benchmarks/repeat_stats.csv/json` to make that variance
   visible by default.
+- Scarce calibration now uses a much sparser pair graph.  This can reproduce an
+  online-like `39/40` miss locally, which is the first useful target for
+  uncovered-task repair experiments.
+- The first useful scarce repair pattern was not a full ejection chain: replace
+  one selected single-task group by an `old_task + uncovered_task` pair served by
+  a different courier that is free after removing the old group.  This improved
+  one sparse calibrated scarce probe from local `1540.606` at `39/40` to
+  `1524.018` at `40/40` without moving the public large anchor.

@@ -1121,6 +1121,58 @@ def _local_cover_uncovered_expected(problem, state, deadline, model, coverage_fi
         if improved:
             continue
 
+        # A missing task can sometimes enter only by replacing an already
+        # selected single-task group with a pair served by a different free
+        # courier.  The older repair below only tries the same courier, which
+        # misses this scarce-case ejection pattern.
+        for group_index, offers in enumerate(current):
+            if time.time() >= deadline:
+                break
+            if not offers:
+                continue
+            old_mask = offers[0].mask
+            old_bits = _bits(old_mask)
+            if len(old_bits) != 1:
+                continue
+
+            base = []
+            base_couriers = set()
+            base_tasks = 0
+            for idx, other in enumerate(current):
+                if idx == group_index:
+                    continue
+                base.append(list(other))
+                base_tasks |= other[0].mask
+                for cand in other:
+                    base_couriers.add(cand.courier)
+
+            missing = uncovered
+            while missing:
+                bit = missing & -missing
+                missing -= bit
+                new_mask = old_mask | bit
+                if new_mask not in problem.by_mask or (new_mask & base_tasks):
+                    continue
+                for cand in problem.by_mask.get(new_mask, []):
+                    if cand.courier in base_couriers:
+                        continue
+                    trial = base + [[cand]]
+                    trial_key = _state_selection_key(
+                        problem, trial, model, coverage_first
+                    )
+                    if trial_key > current_key:
+                        current = trial
+                        current_key = trial_key
+                        improved = True
+                        break
+                if improved:
+                    break
+            if improved:
+                break
+
+        if improved:
+            continue
+
         # More often in scarce cases all couriers are already used.  Replace an
         # existing single-task offer by the same courier's pair offer when that
         # pulls in an uncovered task and improves the active expected model.

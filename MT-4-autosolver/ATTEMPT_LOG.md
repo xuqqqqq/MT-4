@@ -275,3 +275,12 @@ Known stable-ish score profile:
 - Online evidence: not submitted; this is a research harness only.
 - Decision: keep as a guardrail before the next `submission.py` change.
 - Lesson: do not treat a local improvement as meaningful unless it survives the public large anchor and at least one calibrated hidden-like suite, while also respecting the no-repeat list.
+
+## Active Experiment: Scarce Free-Courier Pair Replacement
+
+- Hypothesis: hidden scarce may miss one task because an uncovered order can enter only by replacing an already selected single-order group with a pair served by a different free courier. The existing uncovered repair only tried adding disjoint missing groups or upgrading the same courier's single to a pair.
+- Code change: extend `_local_cover_uncovered_expected()` with a scarce-safe replacement pattern: remove one selected single group, try `old_task + uncovered_task` pair candidates served by any courier not used by the remaining groups, and accept only if `_state_selection_key()` improves. This preserves the bounded coverage bonus and does not force an expensive 40/40 solution.
+- Local evidence: a new structurally sparse calibrated scarce probe reproduced the online-like shape (`39/40`, local `1540.606`). The new repair improved it to `40/40`, local `1524.018`, hash-stable across 3 repeats. The public `large_seed301` anchor stayed hash-identical across repeated runs (`5dadeb7a`, local `667.084`). The original easy hidden-like scarce stayed unchanged, confirming the branch is selective.
+- Verification: `python -m py_compile submission.py`; Python 3.5/3.6 AST parse; `python -m unittest discover -s tests -q`; benchmark repeat smoke on public large, calibrated suite, and sparse calibrated scarce probe.
+- Risk: online scarce may not contain this exact free-courier pair opportunity. If it does not, this should be a no-op; if it does, the acceptance gate requires expected-penalty improvement rather than coverage forcing.
+- Decision: keep as the next online candidate unless a broader benchmark shows a non-scarce hash change.
