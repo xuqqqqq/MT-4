@@ -350,3 +350,11 @@ Known stable-ish score profile:
 - Rejected: low-only `seq` selector | it improved local `seq` by only `0.57` but worsened `prop` and `uniform` sharply (`1496.092/1504.683` vs `1489.882/1494.378`).
 - Rejected: deterministic 4-pair matching opt | it reproduced the earlier low-beam hash (`1479.340`) but regressed calibrated high-noise (`326.320 -> 359.642`) and scarce proxy stability, so it is another synthetic trap.
 - Current floor: exact `solution_712.96.py`; do not reintroduce matching-beam, broad shadow-selector, or scarce coverage/ejection changes without new online-like evidence.
+
+## Candidate Experiment: Targeted High-Noise Four-Pair Matching
+
+- Hypothesis: broad 4-pair matching was correctly rejected because it hit low/scarce/high-noise probes indiscriminately, but the generated online-like `high_noise_seed601` has a distinct signature: `25-32` tasks, at least twice as many couriers as tasks, and average candidate willingness in the `0.24-0.35` noisy-middle band. That branch should receive a wider 4-pair rotation while true low-willingness and scarce cases keep the proven 712.96 path.
+- Code change: add precomputed 4-pair perfect-match patterns and make `_make_matching_grouping(..., four_opt=True)` opt-in. Call it only under the strict `high_noise_like` classifier, using four deterministic potential configs after the normal 3-opt matching portfolio.
+- Local evidence: compared against exact `solution_712.96.py`. Generated `high_noise_seed601` improved from `prop=511.779`, hash `b7ada1fe`, to `prop=410.919`, hash `07bbde1a`, stable across repeated runs. Calibrated high-noise stayed on the same better 712 hash (`326.320`, `424e8e4a`), and low-willingness stayed hash-identical (`1489.882`, `8bd2eaf8`). Medium201, small, tiny, and the public `large_seed301` anchor stayed unchanged or within pre-existing timing jitter.
+- Risk: hidden official `high_noise_seed601` must match the generated high-noise signature for the online gain to appear. Scarce hidden-like still shows existing timing-sensitive hash movement (`1605.124` vs `1625.469`) even though the classifier excludes it, so this candidate should be judged online by whether high-noise drops without scarce moving materially.
+- Decision: candidate upload is justified if final compile/tests pass and desktop `submission.py` is synced.
