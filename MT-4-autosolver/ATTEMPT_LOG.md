@@ -339,3 +339,14 @@ Known stable-ish score profile:
 - Local evidence: hidden-like and calibrated `low_willingness_seed501` both moved from `prop=1489.882`, `seq=1431.112` to `prop=1479.340`, `seq=1420.957`, stable across repeats. Hidden-like high-noise, medium201/202/203, large301/302, small, tiny, and the public `large_seed301` anchor stayed hash-identical in the final guard run. Calibrated high-noise kept the better `424e8e4a` path when the refined low gate excludes the noisy randomized matching block.
 - Rejected during this round: sparse-compatible mask reassign on 25-32 tasks | it improved generated `medium_seed201` once but introduced a worse hash on repeat; best-improvement move/swap tail | no output changes; sparse `seq` acceptance for scarce | no value change and no unique hidden-like improvement; large top15 subset refine | stabilized a worse public-large basin (`prop=666.120`).
 - Risk: previous low-only grouping seeds were online no-ops, so this still needs online validation. This attempt is materially different because it replaces the pair matching search method rather than adding more greedy matching seeds.
+- Online evidence: user reported `713.01`, worse than the known `solution_712.96.py` reference. Low stayed in the same `1804.29` basin and the average did not justify keeping the beam overlay.
+- Decision: revert the beam overlay and restore exact `solution_712.96.py` as the submission floor.
+
+## Closed Experiment: Post-713 Recovery Probes
+
+- Trigger: user reported the beam-overlay submission at `713.01`, while the provided `solution_712.96.py` is the stronger known reference.
+- Rejected: scarce uncovered-task ejection-chain repartition | it was designed to avoid forced coverage and accept only scalar improvements, but local A/B worsened the sparse calibrated scarce probe (`39/40` reference `1554.039` vs ejection `38/40` `1557.104`) and did not improve the public large anchor.
+- Rejected: low-only `prop/uniform` shadow selector | it produced a worse low proxy hash (`1495.823` vs `1489.882`) and made public large less stable.
+- Rejected: low-only `seq` selector | it improved local `seq` by only `0.57` but worsened `prop` and `uniform` sharply (`1496.092/1504.683` vs `1489.882/1494.378`).
+- Rejected: deterministic 4-pair matching opt | it reproduced the earlier low-beam hash (`1479.340`) but regressed calibrated high-noise (`326.320 -> 359.642`) and scarce proxy stability, so it is another synthetic trap.
+- Current floor: exact `solution_712.96.py`; do not reintroduce matching-beam, broad shadow-selector, or scarce coverage/ejection changes without new online-like evidence.
