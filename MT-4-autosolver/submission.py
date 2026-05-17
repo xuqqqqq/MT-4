@@ -2329,8 +2329,10 @@ def solve(input_text: str) -> list:
         and avg_willingness < 0.09
     ):
         # Extremely low willingness cases need a slightly more conservative
-        # construction model without affecting normal medium cases.
-        FAIL_PENALTY = 110.0
+        # construction model without affecting normal medium cases.  The
+        # lower band matches the calibrated low-willingness proxy; the upper
+        # band keeps the proven safer setting for noisier synthetic lows.
+        FAIL_PENALTY = 114.0 if avg_willingness < 0.055 else 110.0
 
     def consider(groups, model=None, ensure_initial=True):
         if model is None:
