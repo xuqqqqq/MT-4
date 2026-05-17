@@ -320,3 +320,14 @@ Known stable-ish score profile:
 - Local evidence: calibrated `high_noise_seed601` improved from `prop=328.176` to `326.320` with stable hash `424e8e4a`; calibrated `low_willingness_seed501` stayed unchanged at `1489.882`; public `large_seed301` repeated 3 times with stable hash `c61c8c2a` and `prop=664.697` under the `0.12 + 8.60` setting. Full calibrated smoke showed no changes to medium, low, scarce, small, or tiny.
 - Rejected: `avg_willingness < 0.15` | it preserved the high/low local scores but made public `large_seed301` alternate between two hashes, so it is less safe than the tested `0.12` gate.
 - Risk: if official `low_willingness_seed501` has average willingness between `0.12` and `0.18`, this could disable a useful random matching block there. The calibrated low probe is far below the new threshold, so the current evidence says the gate separation is reasonable.
+- Online evidence: user reported this mixed change at `713.01`, which is worse than the provided `solution_712.96.py` floor. It improved or preserved several visible rows but still regressed versus the known reference score, so it should not be the upload baseline.
+- Decision: revert the two mixed constants and restore exact `solution_712.96.py` contents before any further experiment.
+
+## Closed Experiment: 712.96 Follow-Up Probes
+
+- Trigger: after restoring the 712.96 reference, we tested whether there was a safe additive improvement worth submitting.
+- Rejected: medium pair/single beam on top of 712.96 | local A/B left high-noise and low unchanged, worsened generated `medium_seed201` from `prop=677.719` to `679.131`, and introduced extra generated-large hash movement. This confirms the earlier medium-beam signal was tied to the older 715 branch, not a safe 712 overlay.
+- Rejected: 25-32 task four-group mask reallocation | all target hashes stayed unchanged, so it was a no-op.
+- Rejected: small 12-18 task four-group exact reallocation | `small_seed100` stayed hash-identical at `prop=385.951`, while the public large anchor became more jittery during repeated smoke. The proven small improvement remains the 712.96 triple search; adding a larger small-only function is not worth the timing risk.
+- Rejected: large cap `8.60` without the low-threshold change | public large remained two-hash unstable and did not recover the clean `c61c8c2a` behavior reliably.
+- Current floor: exact `solution_712.96.py`. Do not overwrite it with speculative local-only changes unless a new probe either changes the intended case in the right direction or is backed by stronger online-like evidence.
