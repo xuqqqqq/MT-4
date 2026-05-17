@@ -304,3 +304,11 @@ Known stable-ish score profile:
 - Rejected: fixed-group multi-offer beam and layer matching | offline upper-bound tests made low cases worse than the current greedy allocator, so the bottleneck is grouping, not extra-offer allocation.
 - Risk: online high/low/medium distributions may reject the new beam state the same way previous low seeds were rejected. This attempt is still structurally different because it searches task partitions globally and improves three calibrated families while preserving the public large anchor.
 - Decision: next online candidate if full tests pass and desktop submission is synced.
+
+## Active Experiment: Adopt 712.96 Reference Floor
+
+- Trigger: user provided `solution_712.96.py`, a known stronger online reference than the 715.57 floor.
+- Hypothesis: the safest immediate improvement is to stop layering speculative beam/scarce coverage variants on the older 715 branch and move the repository submission to the online-proven 712.96 line first.
+- Code change: replace `submission.py` and the desktop upload copy with the provided `solution_712.96.py`. This restores the reference timing, low-willingness matching portfolio, and exact subset/mask/pair/triple/four-group local refinements while removing the newer medium beam and scarce coverage-bonus experiments from the submitted path.
+- Local evidence: `large_seed301` anchor now matches the reference output hash `c61c8c2a` with local `prop=664.697`, `seq=626.320`, `uniform=659.652`; calibrated suite smoke completed without errors. This change is justified primarily by known online score, not by synthetic proxy alone.
+- Risk: this is a large replacement diff, but it moves to a user-provided online-scored solution rather than an untested local-only heuristic.

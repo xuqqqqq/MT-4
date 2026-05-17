@@ -24,7 +24,6 @@ WILLINGNESS_VALUE = 0.0
 DEFAULT_TIME_LIMIT = 5.50
 LOCAL_SEARCH_TIME_FRACTION = 0.35
 FAIL_PENALTY = 100.0
-SCARCE_COVERAGE_BONUS = 15.0
 THREE_PAIR_PATTERNS = (
     ((0, 1), (2, 3), (4, 5)),
     ((0, 1), (2, 4), (3, 5)),
@@ -185,8 +184,12 @@ def _time_budget(problem):
     tasks = problem.n_tasks
     if tasks <= 8 or candidates <= 300:
         return 0.12
-    if tasks <= 20 or candidates <= 2000:
+    if tasks <= 20:
+        return 7.20
+    if candidates <= 2000:
         return 0.25
+    if tasks >= 25:
+        return DEFAULT_TIME_LIMIT
     if candidates <= 8000:
         return 0.45
     if candidates <= 20000:
@@ -358,40 +361,6 @@ def _state_total_score(state):
         for cand in offers:
             total += cand.score
     return total
-
-
-def _state_covered_count(state):
-    mask = 0
-    for offers in state:
-        if offers:
-            mask |= offers[0].mask
-    return _bit_count(mask)
-
-
-def _state_offer_count(state):
-    count = 0
-    for offers in state:
-        count += len(offers)
-    return count
-
-
-def _state_selection_key(problem, state, model, coverage_first):
-    value = _state_model_value(problem, state, model)
-    if value >= 1e90:
-        return (-1, -1e100, -1e100, -1e100, -1e100)
-    if coverage_first:
-        covered = _state_covered_count(state)
-        # Online feedback showed that a 40/40 scarce solution can be worse than
-        # a cheaper 39/40 solution, so coverage is a bounded bonus, not a
-        # lexicographic priority.
-        return (
-            SCARCE_COVERAGE_BONUS * covered - value,
-            covered,
-            -value,
-            -_state_total_score(state),
-            -_state_offer_count(state),
-        )
-    return (-value, 0.0, 0.0, 0.0, 0.0)
 
 
 def _official_expected_value(problem, state):
@@ -653,86 +622,6 @@ def _make_expected_grouping(problem, mode, threshold, noise, seed):
             used |= mask
 
     return _groups_key(groups)
-
-
-def _make_beam_grouping(problem, mode, threshold, beam_width, max_options):
-    """Beam-search a pair/single task partition instead of greedy edge picking."""
-    single_saving = {}
-    for mask in problem.single_masks:
-        single_saving[mask] = _best_first_saving(problem, mask)
-
-    adjacency = [[] for _ in range(problem.n_tasks)]
-    for mask in problem.pair_masks:
-        pair_bits = _bits(mask)
-        if len(pair_bits) != 2:
-            continue
-        left = 1 << pair_bits[0]
-        right = 1 << pair_bits[1]
-        pair_saving = _best_first_saving(problem, mask)
-        if mode == "pair_gain":
-            value = pair_saving - single_saving.get(left, 0.0) - single_saving.get(right, 0.0)
-        elif mode == "pair_raw":
-            value = pair_saving
-        else:
-            value = pair_saving - 0.5 * (
-                single_saving.get(left, 0.0) + single_saving.get(right, 0.0)
-            )
-        if value < threshold:
-            continue
-        first, second = pair_bits
-        adjacency[first].append((value, mask, second))
-        adjacency[second].append((value, mask, first))
-
-    for idx in range(problem.n_tasks):
-        adjacency[idx].sort(reverse=True)
-        if len(adjacency[idx]) > max_options:
-            adjacency[idx] = adjacency[idx][:max_options]
-
-    full_mask = problem.all_task_mask
-    states = [(0.0, 0, ())]
-    for _ in range(problem.n_tasks):
-        next_states = []
-        complete_states = []
-        for value, used, groups in states:
-            remaining = full_mask & ~used
-            if not remaining:
-                complete_states.append((value, used, groups))
-                continue
-            first_bit = remaining & -remaining
-            first_idx = _bits(first_bit)[0]
-            if first_bit in problem.by_mask:
-                next_states.append((value, used | first_bit, groups + (first_bit,)))
-            for edge_value, pair_mask, _ in adjacency[first_idx]:
-                if used & pair_mask:
-                    continue
-                next_states.append(
-                    (value + edge_value, used | pair_mask, groups + (pair_mask,))
-                )
-
-        states = complete_states + next_states
-        if not states:
-            break
-
-        states.sort(key=lambda item: (-item[0], len(item[2]), item[1]))
-        compact = []
-        seen_used = set()
-        for state in states:
-            if state[1] in seen_used:
-                continue
-            seen_used.add(state[1])
-            compact.append(state)
-            if len(compact) >= beam_width:
-                break
-        states = compact
-
-        if states and all(not (full_mask & ~state[1]) for state in states):
-            break
-
-    complete = [state for state in states if not (full_mask & ~state[1])]
-    if not complete:
-        return _all_single_grouping(problem)
-    complete.sort(key=lambda item: (-item[0], len(item[2]), item[1]))
-    return _groups_key(complete[0][2])
 
 
 def _make_forced_pair_grouping(problem):
@@ -1154,112 +1043,6 @@ def _local_replace_sparse(problem, state, deadline):
     return current
 
 
-def _local_cover_uncovered_expected(problem, state, deadline, model, coverage_first=False):
-    current = [list(offers) for offers in state if offers]
-    if not current:
-        return current
-
-    current_key = _state_selection_key(problem, current, model, coverage_first)
-
-    while time.time() < deadline:
-        used_tasks = 0
-        used_couriers = set()
-        for offers in current:
-            if not offers:
-                continue
-            used_tasks |= offers[0].mask
-            for cand in offers:
-                used_couriers.add(cand.courier)
-
-        uncovered = problem.all_task_mask & ~used_tasks
-        if not uncovered:
-            break
-
-        improved = False
-
-        # If any courier is still free, try adding a missing single/pair group.
-        base_state = [list(offers) for offers in current]
-        for mask, candidates in problem.by_mask.items():
-            if time.time() >= deadline:
-                break
-            if mask & used_tasks:
-                continue
-            if mask & uncovered != mask:
-                continue
-            for cand in candidates:
-                if cand.courier in used_couriers:
-                    continue
-                trial = base_state + [[cand]]
-                trial_key = _state_selection_key(problem, trial, model, coverage_first)
-                if trial_key > current_key:
-                    current = trial
-                    current_key = trial_key
-                    improved = True
-                    break
-            if improved:
-                break
-        if improved:
-            continue
-
-        # More often in scarce cases all couriers are already used.  Replace an
-        # existing single-task offer by the same courier's pair offer when that
-        # pulls in an uncovered task and improves the active expected model.
-        for group_index, offers in enumerate(current):
-            if time.time() >= deadline:
-                break
-            if not offers:
-                continue
-            old_mask = offers[0].mask
-            old_bits = _bits(old_mask)
-            if len(old_bits) != 1:
-                continue
-
-            base = []
-            base_couriers = set()
-            base_tasks = 0
-            for idx, other in enumerate(current):
-                if idx == group_index:
-                    continue
-                base.append(list(other))
-                base_tasks |= other[0].mask
-                for cand in other:
-                    base_couriers.add(cand.courier)
-
-            missing = uncovered
-            while missing:
-                bit = missing & -missing
-                missing -= bit
-                new_mask = old_mask | bit
-                if new_mask not in problem.by_mask or (new_mask & base_tasks):
-                    continue
-                for old_cand in offers:
-                    if old_cand.courier in base_couriers:
-                        continue
-                    for cand in problem.by_mask.get(new_mask, []):
-                        if cand.courier != old_cand.courier:
-                            continue
-                        trial = base + [[cand]]
-                        trial_key = _state_selection_key(
-                            problem, trial, model, coverage_first
-                        )
-                        if trial_key > current_key:
-                            current = trial
-                            current_key = trial_key
-                            improved = True
-                            break
-                    if improved:
-                        break
-                if improved:
-                    break
-            if improved:
-                break
-
-        if not improved:
-            break
-
-    return current
-
-
 def _local_replace_sparse_pair(problem, state, deadline):
     current = [list(offers) for offers in state if offers]
     current_value = _prop_expected_value(problem, current)
@@ -1444,6 +1227,578 @@ def _local_improve_expected(problem, state, deadline, model):
     return output
 
 
+def _local_subset_reassign_expected(problem, state, deadline, model):
+    """Reassign all couriers inside a few high-penalty single-task groups."""
+    current = [list(offers) for offers in state if offers]
+    if model != "prop" or len(current) < 3:
+        return current
+    if problem.n_tasks < 25 or problem.n_tasks > 45:
+        return current
+    if len(problem.all_couriers) < problem.n_tasks:
+        return current
+
+    by_key = {}
+    for mask, candidates in problem.by_mask.items():
+        if _bit_count(mask) != 1:
+            continue
+        for cand in candidates:
+            by_key[(mask, cand.courier)] = cand
+
+    def group_value(offers):
+        return _group_value_prop(offers, offers[0].task_count)
+
+    def best_reassign(selected):
+        if time.time() >= deadline:
+            return None
+
+        masks = [current[idx][0].mask for idx in selected]
+        for mask in masks:
+            if _bit_count(mask) != 1:
+                return None
+
+        courier_ids = []
+        seen = set()
+        for idx in selected:
+            for cand in current[idx]:
+                if cand.courier not in seen:
+                    seen.add(cand.courier)
+                    courier_ids.append(cand.courier)
+
+        group_count = len(selected)
+        courier_count = len(courier_ids)
+        if courier_count < group_count or courier_count > 9:
+            return None
+
+        old_value = 0.0
+        for idx in selected:
+            old_value += group_value(current[idx])
+
+        full = (1 << courier_count) - 1
+        subset_values = []
+        subset_offers = []
+        for mask in masks:
+            candidates = []
+            for courier_id in courier_ids:
+                cand = by_key.get((mask, courier_id))
+                if cand is None:
+                    return None
+                candidates.append(cand)
+
+            values = [0.0] * (1 << courier_count)
+            offers_cache = [None] * (1 << courier_count)
+            for subset in range(1, 1 << courier_count):
+                offers = []
+                for bit in range(courier_count):
+                    if subset & (1 << bit):
+                        offers.append(candidates[bit])
+                values[subset] = group_value(offers)
+                offers_cache[subset] = offers
+            subset_values.append(values)
+            subset_offers.append(offers_cache)
+
+        best_value = old_value
+        best_sets = None
+
+        # This helper is deliberately specialized to 3 groups.  It is much
+        # faster than recursive assignment and lets the large cases afford a
+        # wider neighborhood.
+        for first in range(1, full):
+            if time.time() >= deadline:
+                break
+            rest = full ^ first
+            second = rest
+            while second:
+                third = rest ^ second
+                if third:
+                    value = (
+                        subset_values[0][first]
+                        + subset_values[1][second]
+                        + subset_values[2][third]
+                    )
+                    if value + 1e-9 < best_value:
+                        best_value = value
+                        best_sets = (first, second, third)
+                second = (second - 1) & rest
+
+        if best_sets is None:
+            return None
+        groups = []
+        for group_index, subset in enumerate(best_sets):
+            groups.append(list(subset_offers[group_index][subset]))
+        return old_value - best_value, groups
+
+    def evaluate_triples(triples):
+        best = None
+        for selected in triples:
+            if time.time() >= deadline:
+                break
+            result = best_reassign(selected)
+            if result is None:
+                continue
+            gain, groups = result
+            if gain > 1e-9 and (best is None or gain > best[0]):
+                best = (gain, selected, groups)
+        return best
+
+    changed_indices = []
+    move_count = 0
+    while time.time() < deadline and move_count < 5:
+        values = []
+        for idx in range(len(current)):
+            values.append((group_value(current[idx]), idx))
+        order = [idx for _, idx in sorted(values, reverse=True)]
+
+        if changed_indices:
+            triple_set = set()
+            for changed in changed_indices:
+                for left_pos in range(len(order)):
+                    left = order[left_pos]
+                    if left == changed:
+                        continue
+                    for right_pos in range(left_pos + 1, len(order)):
+                        right = order[right_pos]
+                        if right == changed:
+                            continue
+                        triple_set.add(tuple(sorted((changed, left, right))))
+            triples = list(triple_set)
+            triples.sort(
+                key=lambda item: -(
+                    group_value(current[item[0]])
+                    + group_value(current[item[1]])
+                    + group_value(current[item[2]])
+                )
+            )
+            best = evaluate_triples(triples)
+        else:
+            selected_order = order[:min(12, len(order))]
+            triples = []
+            for a in range(len(selected_order)):
+                for b in range(a + 1, len(selected_order)):
+                    for c in range(b + 1, len(selected_order)):
+                        triples.append(
+                            (selected_order[a], selected_order[b], selected_order[c])
+                        )
+            best = evaluate_triples(triples)
+            if best is None and time.time() < deadline:
+                selected_order = order[:min(15, len(order))]
+                triples = []
+                for a in range(len(selected_order)):
+                    for b in range(a + 1, len(selected_order)):
+                        for c in range(b + 1, len(selected_order)):
+                            triples.append(
+                                (
+                                    selected_order[a],
+                                    selected_order[b],
+                                    selected_order[c],
+                                )
+                            )
+                best = evaluate_triples(triples)
+
+        if best is None:
+            break
+
+        _, selected, groups = best
+        for pos, idx in enumerate(selected):
+            current[idx] = groups[pos]
+        changed_indices = list(selected)
+        move_count += 1
+
+    output = []
+    for offers in current:
+        if offers:
+            output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
+    return output
+
+
+def _local_mask_subset_reassign_expected(problem, state, deadline, model):
+    current = [list(offers) for offers in state if offers]
+    if model != "prop" or len(current) < 3:
+        return current
+    if problem.n_tasks < 25 or problem.n_tasks > 32:
+        return current
+
+    by_key = {}
+    for mask, candidates in problem.by_mask.items():
+        for cand in candidates:
+            by_key[(mask, cand.courier)] = cand
+
+    def group_value(offers):
+        return _group_value_prop(offers, offers[0].task_count)
+
+    def best_reassign(selected):
+        if time.time() >= deadline:
+            return None
+        masks = [current[idx][0].mask for idx in selected]
+        courier_ids = []
+        seen = set()
+        for idx in selected:
+            for cand in current[idx]:
+                if cand.courier not in seen:
+                    seen.add(cand.courier)
+                    courier_ids.append(cand.courier)
+
+        group_count = len(selected)
+        courier_count = len(courier_ids)
+        if courier_count < group_count or courier_count > 9:
+            return None
+
+        full = (1 << courier_count) - 1
+        old_value = 0.0
+        for idx in selected:
+            old_value += group_value(current[idx])
+
+        subset_values = []
+        subset_offers = []
+        for mask in masks:
+            candidates = []
+            for courier_id in courier_ids:
+                cand = by_key.get((mask, courier_id))
+                if cand is None:
+                    return None
+                candidates.append(cand)
+
+            values = [0.0] * (1 << courier_count)
+            offers_cache = [None] * (1 << courier_count)
+            for subset in range(1, 1 << courier_count):
+                offers = []
+                for bit in range(courier_count):
+                    if subset & (1 << bit):
+                        offers.append(candidates[bit])
+                values[subset] = group_value(offers)
+                offers_cache[subset] = offers
+            subset_values.append(values)
+            subset_offers.append(offers_cache)
+
+        best_value = old_value
+        best_sets = None
+        if group_count == 2:
+            for first in range(1, full):
+                second = full ^ first
+                if not second:
+                    continue
+                value = subset_values[0][first] + subset_values[1][second]
+                if value + 1e-9 < best_value:
+                    best_value = value
+                    best_sets = (first, second)
+        else:
+            for first in range(1, full):
+                if time.time() >= deadline:
+                    break
+                rest = full ^ first
+                second = rest
+                while second:
+                    third = rest ^ second
+                    if third:
+                        value = (
+                            subset_values[0][first]
+                            + subset_values[1][second]
+                            + subset_values[2][third]
+                        )
+                        if value + 1e-9 < best_value:
+                            best_value = value
+                            best_sets = (first, second, third)
+                    second = (second - 1) & rest
+
+        if best_sets is None:
+            return None
+        groups = []
+        for group_index, subset in enumerate(best_sets):
+            groups.append(list(subset_offers[group_index][subset]))
+        return old_value - best_value, groups
+
+    move_count = 0
+    while time.time() < deadline and move_count < 5:
+        values = []
+        for idx in range(len(current)):
+            values.append((group_value(current[idx]), idx))
+        order = [idx for _, idx in sorted(values, reverse=True)]
+        order = order[:min(18, len(order))]
+        best = None
+
+        for group_count in (3, 2):
+            if time.time() >= deadline or best is not None:
+                break
+            for a in range(len(order)):
+                if time.time() >= deadline:
+                    break
+                for b in range(a + 1, len(order)):
+                    if time.time() >= deadline:
+                        break
+                    if group_count == 2:
+                        selected = (order[a], order[b])
+                        result = best_reassign(selected)
+                        if result is not None and result[0] > 1e-9:
+                            if best is None or result[0] > best[0]:
+                                best = (result[0], selected, result[1])
+                        continue
+                    for c in range(b + 1, len(order)):
+                        if time.time() >= deadline:
+                            break
+                        selected = (order[a], order[b], order[c])
+                        result = best_reassign(selected)
+                        if result is not None and result[0] > 1e-9:
+                            if best is None or result[0] > best[0]:
+                                best = (result[0], selected, result[1])
+
+        if best is None:
+            break
+        _, selected, groups = best
+        for pos, idx in enumerate(selected):
+            current[idx] = groups[pos]
+        move_count += 1
+
+    output = []
+    for offers in current:
+        if offers:
+            output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
+    return output
+
+
+def _local_pair_subset_reassign_expected(problem, state, deadline, model):
+    """Small-case exact reallocation between two single-task groups."""
+    current = [list(offers) for offers in state if offers]
+    if model != "prop" or len(current) < 2:
+        return current
+    if problem.n_tasks > 20:
+        return current
+
+    by_key = {}
+    for mask, candidates in problem.by_mask.items():
+        if _bit_count(mask) != 1:
+            continue
+        for cand in candidates:
+            by_key[(mask, cand.courier)] = cand
+
+    def group_value(offers):
+        return _group_value_prop(offers, offers[0].task_count)
+
+    move_count = 0
+    while time.time() < deadline and move_count < 10:
+        values = []
+        for idx in range(len(current)):
+            values.append((group_value(current[idx]), idx))
+        order = [idx for _, idx in sorted(values, reverse=True)]
+        best = None
+
+        for left_pos in range(len(order)):
+            if time.time() >= deadline:
+                break
+            left_index = order[left_pos]
+            left_mask = current[left_index][0].mask
+            if _bit_count(left_mask) != 1:
+                continue
+            for right_pos in range(left_pos + 1, len(order)):
+                if time.time() >= deadline:
+                    break
+                right_index = order[right_pos]
+                right_mask = current[right_index][0].mask
+                if _bit_count(right_mask) != 1:
+                    continue
+
+                courier_ids = []
+                seen = set()
+                for cand in current[left_index] + current[right_index]:
+                    if cand.courier not in seen:
+                        seen.add(cand.courier)
+                        courier_ids.append(cand.courier)
+                courier_count = len(courier_ids)
+                if courier_count < 2 or courier_count > 18:
+                    continue
+
+                left_candidates = []
+                right_candidates = []
+                ok = True
+                for courier_id in courier_ids:
+                    left_cand = by_key.get((left_mask, courier_id))
+                    right_cand = by_key.get((right_mask, courier_id))
+                    if left_cand is None or right_cand is None:
+                        ok = False
+                        break
+                    left_candidates.append(left_cand)
+                    right_candidates.append(right_cand)
+                if not ok:
+                    continue
+
+                old_value = group_value(current[left_index]) + group_value(current[right_index])
+                full = (1 << courier_count) - 1
+                left_values = [0.0] * (1 << courier_count)
+                right_values = [0.0] * (1 << courier_count)
+                left_offers = [None] * (1 << courier_count)
+                right_offers = [None] * (1 << courier_count)
+                for subset in range(1, 1 << courier_count):
+                    offers = []
+                    for bit in range(courier_count):
+                        if subset & (1 << bit):
+                            offers.append(left_candidates[bit])
+                    left_values[subset] = group_value(offers)
+                    left_offers[subset] = offers
+
+                    offers = []
+                    for bit in range(courier_count):
+                        if subset & (1 << bit):
+                            offers.append(right_candidates[bit])
+                    right_values[subset] = group_value(offers)
+                    right_offers[subset] = offers
+
+                subset = 1
+                while subset < full:
+                    other = full ^ subset
+                    if other:
+                        value = left_values[subset] + right_values[other]
+                        gain = old_value - value
+                        if gain > 1e-9 and (best is None or gain > best[0]):
+                            best = (
+                                gain,
+                                left_index,
+                                right_index,
+                                left_offers[subset],
+                                right_offers[other],
+                            )
+                    subset += 1
+
+        if best is None:
+            break
+        _, left_index, right_index, left_offers, right_offers = best
+        current[left_index] = list(left_offers)
+        current[right_index] = list(right_offers)
+        move_count += 1
+
+    output = []
+    for offers in current:
+        if offers:
+            output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
+    return output
+
+
+def _local_triple_subset_reassign_expected(problem, state, deadline, model):
+    """Wider small-case neighborhood: split three groups' couriers exactly."""
+    current = [list(offers) for offers in state if offers]
+    if model != "prop" or len(current) < 3:
+        return current
+    if problem.n_tasks < 9 or problem.n_tasks > 18:
+        return current
+
+    by_key = {}
+    for mask, candidates in problem.by_mask.items():
+        if _bit_count(mask) != 1:
+            continue
+        for cand in candidates:
+            by_key[(mask, cand.courier)] = cand
+
+    def group_value(offers):
+        return _group_value_prop(offers, offers[0].task_count)
+
+    move_count = 0
+    while time.time() < deadline and move_count < 3:
+        values = []
+        for idx in range(len(current)):
+            values.append((group_value(current[idx]), idx))
+        order = [idx for _, idx in sorted(values, reverse=True)]
+        order = order[:min(16, len(order))]
+        best = None
+
+        for a_pos in range(len(order)):
+            if time.time() >= deadline:
+                break
+            for b_pos in range(a_pos + 1, len(order)):
+                if time.time() >= deadline:
+                    break
+                for c_pos in range(b_pos + 1, len(order)):
+                    if time.time() >= deadline:
+                        break
+                    selected = (order[a_pos], order[b_pos], order[c_pos])
+                    masks = [current[idx][0].mask for idx in selected]
+                    if any(_bit_count(mask) != 1 for mask in masks):
+                        continue
+
+                    courier_ids = []
+                    seen = set()
+                    for idx in selected:
+                        for cand in current[idx]:
+                            if cand.courier not in seen:
+                                seen.add(cand.courier)
+                                courier_ids.append(cand.courier)
+                    courier_count = len(courier_ids)
+                    if courier_count < 3 or courier_count > 13:
+                        continue
+
+                    candidates_by_group = []
+                    ok = True
+                    for mask in masks:
+                        group_candidates = []
+                        for courier_id in courier_ids:
+                            cand = by_key.get((mask, courier_id))
+                            if cand is None:
+                                ok = False
+                                break
+                            group_candidates.append(cand)
+                        if not ok:
+                            break
+                        candidates_by_group.append(group_candidates)
+                    if not ok:
+                        continue
+
+                    old_value = 0.0
+                    for idx in selected:
+                        old_value += group_value(current[idx])
+
+                    full = (1 << courier_count) - 1
+                    subset_values = []
+                    subset_offers = []
+                    for group_index in range(3):
+                        values_cache = [0.0] * (1 << courier_count)
+                        offers_cache = [None] * (1 << courier_count)
+                        for subset in range(1, 1 << courier_count):
+                            offers = []
+                            group_candidates = candidates_by_group[group_index]
+                            for bit in range(courier_count):
+                                if subset & (1 << bit):
+                                    offers.append(group_candidates[bit])
+                            values_cache[subset] = group_value(offers)
+                            offers_cache[subset] = offers
+                        subset_values.append(values_cache)
+                        subset_offers.append(offers_cache)
+
+                    first = 1
+                    while first < full:
+                        rest = full ^ first
+                        second = rest
+                        while second:
+                            third = rest ^ second
+                            if third:
+                                value = (
+                                    subset_values[0][first]
+                                    + subset_values[1][second]
+                                    + subset_values[2][third]
+                                )
+                                gain = old_value - value
+                                if gain > 1e-9 and (best is None or gain > best[0]):
+                                    best = (
+                                        gain,
+                                        selected,
+                                        (
+                                            subset_offers[0][first],
+                                            subset_offers[1][second],
+                                            subset_offers[2][third],
+                                        ),
+                                    )
+                            second = (second - 1) & rest
+                        first += 1
+
+        if best is None:
+            break
+        _, selected, groups = best
+        for pos, idx in enumerate(selected):
+            current[idx] = list(groups[pos])
+        move_count += 1
+
+    output = []
+    for offers in current:
+        if offers:
+            output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
+    return output
+
+
 def _restricted_expected_assignment(problem, groups, courier_ids, model):
     state = [[] for _ in groups]
     used_couriers = set()
@@ -1564,106 +1919,6 @@ def _local_repartition_expected(problem, state, deadline, model):
     return output
 
 
-def _local_insert_uncovered_repartition(
-    problem, state, deadline, model, coverage_first=False
-):
-    current = [list(offers) for offers in state if offers]
-    if len(current) < 1:
-        return current
-
-    current_key = _state_selection_key(problem, current, model, coverage_first)
-    rnd = random.Random(20260518)
-
-    while time.time() < deadline:
-        used_tasks = 0
-        for offers in current:
-            if offers:
-                used_tasks |= offers[0].mask
-        uncovered = problem.all_task_mask & ~used_tasks
-        if not uncovered:
-            break
-
-        moves = []
-        for i in range(len(current)):
-            moves.append((i,))
-        for i in range(len(current)):
-            for j in range(i + 1, len(current)):
-                moves.append((i, j))
-        rnd.shuffle(moves)
-
-        improved = False
-        missing = uncovered
-        while missing and not improved:
-            missing_bit = missing & -missing
-            missing -= missing_bit
-
-            for selected in moves:
-                if time.time() >= deadline:
-                    break
-
-                union_mask = missing_bit
-                local_couriers = []
-                old_groups = []
-                selected_set = set(selected)
-                base = []
-                for idx, offers in enumerate(current):
-                    if idx in selected_set:
-                        if not offers:
-                            continue
-                        union_mask |= offers[0].mask
-                        old_groups.append(offers[0].mask)
-                        for cand in offers:
-                            if cand.courier not in local_couriers:
-                                local_couriers.append(cand.courier)
-                    else:
-                        base.append(list(offers))
-
-                if not local_couriers:
-                    continue
-                if _bit_count(union_mask) > 2 * len(local_couriers):
-                    continue
-
-                alternatives = _enumerate_partitions(problem, union_mask)
-                alternatives.sort(key=lambda item: (len(item), item))
-                old_key = _groups_key(old_groups)
-
-                for alt_groups in alternatives:
-                    if alt_groups == old_key:
-                        continue
-                    if len(alt_groups) > len(local_couriers):
-                        continue
-                    local_state = _restricted_expected_assignment(
-                        problem, list(alt_groups), local_couriers, model
-                    )
-                    local_covered = 0
-                    for offers in local_state:
-                        if offers:
-                            local_covered |= offers[0].mask
-                    if local_covered != union_mask:
-                        continue
-
-                    trial = base + local_state
-                    trial_key = _state_selection_key(
-                        problem, trial, model, coverage_first
-                    )
-                    if trial_key > current_key:
-                        current = trial
-                        current_key = trial_key
-                        improved = True
-                        break
-                if improved:
-                    break
-
-        if not improved:
-            break
-
-    output = []
-    for offers in current:
-        if offers:
-            output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
-    return output
-
-
 def _local_repartition_three_expected(problem, state, deadline, model):
     current = [list(offers) for offers in state if offers]
     if len(current) < 3 or problem.n_tasks > 35:
@@ -1710,6 +1965,80 @@ def _local_repartition_three_expected(problem, state, deadline, model):
 
             base = []
             selected_set = set(selected)
+            for idx, offers in enumerate(current):
+                if idx not in selected_set:
+                    base.append(list(offers))
+
+            for alt_groups in alternatives:
+                if alt_groups == old_key:
+                    continue
+                local_state = _restricted_expected_assignment(
+                    problem, list(alt_groups), local_couriers, model
+                )
+                trial = base + local_state
+                trial_value = _state_model_value(problem, trial, model)
+                if trial_value + 1e-9 < current_value:
+                    current = trial
+                    current_value = trial_value
+                    improved = True
+                    break
+            if improved:
+                break
+
+        if not improved:
+            break
+
+    output = []
+    for offers in current:
+        if offers:
+            output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
+    return output
+
+
+def _local_repartition_four_expected(problem, state, deadline, model):
+    current = [list(offers) for offers in state if offers]
+    if len(current) < 4 or problem.n_tasks > 35:
+        return current
+
+    current_value = _state_model_value(problem, current, model)
+    rnd = random.Random(20260519)
+
+    while time.time() < deadline:
+        improved = False
+        quads = []
+        for a in range(len(current)):
+            for b in range(a + 1, len(current)):
+                for c in range(b + 1, len(current)):
+                    for d in range(c + 1, len(current)):
+                        quads.append((a, b, c, d))
+        rnd.shuffle(quads)
+
+        for selected in quads[:1400]:
+            if time.time() >= deadline:
+                break
+
+            union_mask = 0
+            local_couriers = []
+            old_groups = []
+            for idx in selected:
+                offers = current[idx]
+                if not offers:
+                    continue
+                union_mask |= offers[0].mask
+                old_groups.append(offers[0].mask)
+                for cand in offers:
+                    if cand.courier not in local_couriers:
+                        local_couriers.append(cand.courier)
+
+            if len(old_groups) != 4 or _bit_count(union_mask) > 8:
+                continue
+
+            alternatives = _enumerate_partitions(problem, union_mask)
+            alternatives.sort(key=lambda x: (len(x), x))
+            old_key = _groups_key(old_groups)
+
+            selected_set = set(selected)
+            base = []
             for idx, offers in enumerate(current):
                 if idx not in selected_set:
                     base.append(list(offers))
@@ -1981,7 +2310,6 @@ def solve(input_text: str) -> list:
     group_deadline = start_time + max(0.06, time_budget * 0.25)
 
     best = [1e100, None]
-    best_key = [None]
     tried = set()
     target_model = "prop" if len(problem.all_couriers) >= problem.n_tasks else "seq"
     avg_willingness = 0.0
@@ -1992,31 +2320,6 @@ def solve(input_text: str) -> list:
             willingness_count += 1
     if willingness_count:
         avg_willingness /= willingness_count
-    scarce_couriers = len(problem.all_couriers) <= problem.n_tasks * 1.35
-    low_willingness = avg_willingness < 0.35
-    strict_low_willingness = (
-        avg_willingness < 0.16 and not scarce_couriers and problem.n_tasks <= 32
-    )
-    if not scarce_couriers and 25 <= problem.n_tasks <= 32 and time_budget < 1.20:
-        time_budget = 1.20
-        deadline = start_time + time_budget
-        group_deadline = start_time + max(0.06, time_budget * 0.25)
-    coverage_first = scarce_couriers and problem.n_tasks >= 25
-
-    def maybe_keep_state(state):
-        if state is None:
-            return
-        value = _state_model_value(problem, state, target_model)
-        if coverage_first:
-            key = _state_selection_key(problem, state, target_model, True)
-            if best_key[0] is None or key > best_key[0]:
-                best_key[0] = key
-                best[0] = value
-                best[1] = state
-            return
-        if value < best[0]:
-            best[0] = value
-            best[1] = state
 
     def consider(groups, model=None, ensure_initial=True):
         if model is None:
@@ -2027,45 +2330,31 @@ def solve(input_text: str) -> list:
             return
         tried.add(key)
         state = _greedy_expected_assignment(problem, groups, model, ensure_initial)
-        maybe_keep_state(state)
+        value = _state_model_value(problem, state, target_model)
+        if value < best[0]:
+            best[0] = value
+            best[1] = state
 
     def consider_state(state):
-        maybe_keep_state(state)
+        value = _state_model_value(problem, state, target_model)
+        if value < best[0]:
+            best[0] = value
+            best[1] = state
 
     # The single-task grouping is very strong when there are many couriers,
     # because the official score charges expected cost, not raw offer count.
     consider(_all_single_grouping(problem))
     forced_pair_groups = _make_forced_pair_grouping(problem)
     consider(forced_pair_groups, target_model)
+    scarce_couriers = len(problem.all_couriers) <= problem.n_tasks * 1.35
+    low_willingness = avg_willingness < 0.35
+    very_low_willingness = avg_willingness < 0.28
+    extreme_low_willingness = avg_willingness < 0.18
+    seed = 17
 
     if scarce_couriers or low_willingness:
         consider(forced_pair_groups, "seq")
         consider(forced_pair_groups, "seq", False)
-
-    # Greedy pair selection can lock the solver into one matching basin.  This
-    # bounded beam keeps several global pair/single partitions and lets the
-    # expected allocator decide whether any of them beat the incumbent.
-    if not scarce_couriers and 25 <= problem.n_tasks <= 32:
-        beam_specs = (
-            ("pair_gain", (0.0, 10.0, -80.0, -40.0, 25.0)),
-            ("pair_half", (0.0, -80.0, -40.0)),
-        )
-        for mode, beam_thresholds in beam_specs:
-            for threshold in beam_thresholds:
-                if time.time() >= group_deadline:
-                    break
-                consider(_make_beam_grouping(problem, mode, threshold, 96, 14))
-            if time.time() >= group_deadline:
-                break
-
-    # Low-willingness medium cases can need a globally consistent pair/single
-    # decomposition. Keep this deterministic and use expected-value matching
-    # only; do not reintroduce the unstable potential/top-k matching path.
-    if strict_low_willingness:
-        low_expected_groups = _make_matching_grouping(
-            problem, "expected", 0, 0.0, 0.0, 17, three_opt=True
-        )
-        consider(low_expected_groups, target_model)
 
     if scarce_couriers:
         sparse_state = _candidate_saving_assignment(problem)
@@ -2074,18 +2363,60 @@ def solve(input_text: str) -> list:
             sparse_state = _local_replace_sparse(
                 problem, sparse_state, sparse_deadline
             )
-        if time.time() < deadline:
-            sparse_cover_deadline = min(
-                deadline, start_time + max(0.08, time_budget * 0.35)
-            )
-            sparse_state = _local_cover_uncovered_expected(
-                problem, sparse_state, sparse_cover_deadline, target_model, coverage_first
+        if problem.n_tasks >= 35 and len(problem.all_couriers) <= max(24, int(problem.n_tasks * 0.65)):
+            sparse_pair_deadline = min(start_time + 3.15, time.time() + 2.35)
+            sparse_state = _local_replace_sparse_pair(
+                problem, sparse_state, sparse_pair_deadline
             )
         consider_state(sparse_state)
 
+    if (
+        low_willingness
+        and problem.n_tasks >= 25
+        and problem.n_tasks <= 32
+        and len(problem.all_couriers) >= problem.n_tasks
+    ):
+        matching_configs = (
+            ("potential_half", 3, -80.0, "prop", False),
+            ("potential_raw", 3, -80.0, "prop", False),
+            ("potential_gain", 3, -80.0, "prop", False),
+            ("potential_half", 4, -80.0, "prop", False),
+            ("potential_raw", 4, -80.0, "prop", False),
+            ("potential_gain", 4, -80.0, "prop", False),
+            ("potential_half", 5, -80.0, "prop", False),
+            ("potential_gain", 5, -80.0, "seq", False),
+            ("potential_half", 4, 25.0, "seq", False),
+            ("potential_gain", 5, -120.0, "prop", False),
+            ("potential_gain", 5, -80.0, "prop", False),
+            ("potential_gain", 3, -40.0, "prop", False),
+        )
+        for mode, top_k, threshold, model, ensure_initial in matching_configs:
+            if time.time() >= deadline:
+                break
+            groups = _make_matching_grouping(
+                problem, mode, top_k, threshold, 0.0, seed, True
+            )
+            consider(groups, model, ensure_initial)
+            seed += 13
+        if extreme_low_willingness:
+            randomized_matching_configs = (
+                ("potential_half", 3, 20.0, 50.0, 151),
+                ("potential_half", 3, 20.0, 90.0, 151),
+                ("potential_half", 3, 20.0, 140.0, 29),
+                ("potential_half", 3, 20.0, 25.0, 151),
+                ("potential_half", 3, 20.0, 25.0, 97),
+                ("potential_half", 3, 40.0, 140.0, 29),
+            )
+            for mode, top_k, threshold, noise, match_seed in randomized_matching_configs:
+                if time.time() >= deadline:
+                    break
+                groups = _make_matching_grouping(
+                    problem, mode, top_k, threshold, noise, match_seed, True
+                )
+                consider(groups, "prop", False)
+
     # Pair-heavy groupings matter when couriers are scarce, because one courier
     # can cover two tasks and avoid the 100-point failure penalty for both.
-    seed = 17
     modes = ("pair_raw", "pair_half", "pair_gain")
     thresholds = (-220.0, -140.0, -80.0, -40.0, -10.0, 0.0, 10.0, 25.0, 40.0, 60.0)
     noises = (0.0, 2.0, 6.0, 12.0, 24.0)
@@ -2132,34 +2463,164 @@ def solve(input_text: str) -> list:
         improved_state = _local_repartition_expected(
             problem, best[1], min(deadline, repartition_deadline), target_model
         )
-        maybe_keep_state(improved_state)
-    if time.time() < deadline:
-        improved_state = _local_improve_expected(problem, best[1], deadline, target_model)
-        maybe_keep_state(improved_state)
-    if scarce_couriers and time.time() < deadline:
-        improved_state = _local_insert_uncovered_repartition(
-            problem, best[1], deadline, target_model, coverage_first
-        )
-        maybe_keep_state(improved_state)
-    if scarce_couriers and time.time() < deadline:
-        improved_state = _local_cover_uncovered_expected(
-            problem, best[1], deadline, target_model, coverage_first
-        )
-        maybe_keep_state(improved_state)
-    if (
-        time.time() < deadline
-        and problem.n_tasks <= 35
+        improved_value = _state_model_value(problem, improved_state, target_model)
+        if improved_value < best[0]:
+            best[0] = improved_value
+            best[1] = improved_state
+    tail_repartition = problem.n_tasks <= 35 and len(problem.all_couriers) >= problem.n_tasks
+    deep_tail_repartition = tail_repartition and (
+        time_budget > 1.0 or problem.n_tasks <= 20
+    )
+    single_offer_refine = (
+        target_model == "prop"
+        and problem.n_tasks >= 25
+        and problem.n_tasks <= 45
         and len(problem.all_couriers) >= problem.n_tasks
-    ):
+        and not very_low_willingness
+    )
+    mask_offer_refine = (
+        target_model == "prop"
+        and problem.n_tasks >= 25
+        and problem.n_tasks <= 32
+        and len(problem.all_couriers) >= problem.n_tasks
+    )
+    large_single_refine = single_offer_refine and problem.n_tasks >= 36
+    if time.time() < deadline:
+        improve_deadline = deadline
+        if deep_tail_repartition and deadline - time.time() > 1.20:
+            improve_deadline = deadline - 1.20
+        if large_single_refine and deadline - time.time() > 2.10:
+            improve_deadline = min(improve_deadline, deadline - 2.10)
+        elif single_offer_refine and deadline - time.time() > 0.80:
+            improve_deadline = min(improve_deadline, deadline - 0.80)
+        if mask_offer_refine and deadline - time.time() > 1.10:
+            improve_deadline = min(improve_deadline, deadline - 1.10)
+        improved_state = _local_improve_expected(
+            problem, best[1], improve_deadline, target_model
+        )
+        improved_value = _state_model_value(problem, improved_state, target_model)
+        if improved_value < best[0]:
+            best[0] = improved_value
+            best[1] = improved_state
+
+    if mask_offer_refine and time.time() < deadline:
+        improved_state = _local_mask_subset_reassign_expected(
+            problem, best[1], min(deadline, time.time() + 0.95), target_model
+        )
+        improved_value = _state_model_value(problem, improved_state, target_model)
+        if improved_value < best[0]:
+            best[0] = improved_value
+            best[1] = improved_state
+
+    if scarce_couriers and problem.n_tasks >= 35 and time.time() < deadline:
+        sparse_pair_deadline = min(deadline, time.time() + 2.50)
+        improved_state = _local_replace_sparse_pair(
+            problem, best[1], sparse_pair_deadline
+        )
+        improved_value = _state_model_value(problem, improved_state, target_model)
+        if improved_value < best[0]:
+            best[0] = improved_value
+            best[1] = improved_state
+
+    if single_offer_refine and time.time() < deadline:
+        # The public page gives 10 seconds per case.  Keep the general solver
+        # conservative, but spend a little extra only on the 40-task large
+        # family where this neighborhood consistently pays for itself.
+        if large_single_refine:
+            refine_deadline = min(start_time + 8.65, time.time() + 5.20)
+        else:
+            refine_deadline = min(deadline, time.time() + 0.55)
+        improved_state = _local_subset_reassign_expected(
+            problem, best[1], refine_deadline, target_model
+        )
+        improved_value = _state_model_value(problem, improved_state, target_model)
+        if improved_value < best[0]:
+            best[0] = improved_value
+            best[1] = improved_state
+            if time.time() < deadline:
+                improved_state = _local_improve_expected(
+                    problem, best[1], min(deadline, time.time() + 0.25), target_model
+                )
+                improved_value = _state_model_value(problem, improved_state, target_model)
+                if improved_value < best[0]:
+                    best[0] = improved_value
+                    best[1] = improved_state
+
+    if tail_repartition and not deep_tail_repartition and time.time() < deadline:
         improved_state = _local_repartition_three_expected(
             problem, best[1], deadline, target_model
         )
-        old_state = best[1]
-        maybe_keep_state(improved_state)
-        if best[1] is not old_state:
+        improved_value = _state_model_value(problem, improved_state, target_model)
+        if improved_value < best[0]:
+            best[0] = improved_value
+            best[1] = improved_state
             if time.time() < deadline:
                 improved_state = _local_improve_expected(
                     problem, best[1], deadline, target_model
                 )
-                maybe_keep_state(improved_state)
+                improved_value = _state_model_value(problem, improved_state, target_model)
+                if improved_value < best[0]:
+                    best[0] = improved_value
+                    best[1] = improved_state
+
+    if deep_tail_repartition and time.time() < deadline:
+        for _ in range(3):
+            before_value = best[0]
+            improved_state = _local_repartition_three_expected(
+                problem, best[1], deadline, target_model
+            )
+            improved_value = _state_model_value(problem, improved_state, target_model)
+            if improved_value < best[0]:
+                best[0] = improved_value
+                best[1] = improved_state
+            if time_budget > 1.0 and time.time() < deadline:
+                four_deadline = min(deadline, time.time() + 0.65)
+                improved_state = _local_repartition_four_expected(
+                    problem, best[1], four_deadline, target_model
+                )
+                improved_value = _state_model_value(problem, improved_state, target_model)
+                if improved_value < best[0]:
+                    best[0] = improved_value
+                    best[1] = improved_state
+            if time.time() < deadline:
+                improved_state = _local_improve_expected(
+                    problem, best[1], deadline, target_model
+                )
+                improved_value = _state_model_value(problem, improved_state, target_model)
+                if improved_value < best[0]:
+                    best[0] = improved_value
+                    best[1] = improved_state
+            if best[0] >= before_value - 1e-9 or time.time() >= deadline:
+                break
+    if (
+        target_model == "prop"
+        and problem.n_tasks <= 20
+        and len(problem.all_couriers) >= problem.n_tasks
+        and time.time() < deadline
+    ):
+        improved_state = _local_pair_subset_reassign_expected(
+            problem, best[1], min(deadline, time.time() + 1.35), target_model
+        )
+        improved_value = _state_model_value(problem, improved_state, target_model)
+        if improved_value < best[0]:
+            best[0] = improved_value
+            best[1] = improved_state
+        if problem.n_tasks >= 9 and problem.n_tasks <= 18 and time.time() < deadline:
+            triple_deadline = min(deadline - 1.65, time.time() + 4.60)
+            if triple_deadline > time.time():
+                improved_state = _local_triple_subset_reassign_expected(
+                    problem, best[1], triple_deadline, target_model
+                )
+                improved_value = _state_model_value(problem, improved_state, target_model)
+                if improved_value < best[0]:
+                    best[0] = improved_value
+                    best[1] = improved_state
+        if time.time() < deadline:
+            improved_state = _local_pair_subset_reassign_expected(
+                problem, best[1], deadline, target_model
+            )
+            improved_value = _state_model_value(problem, improved_state, target_model)
+            if improved_value < best[0]:
+                best[0] = improved_value
+                best[1] = improved_state
     return _state_to_output(best[1])
