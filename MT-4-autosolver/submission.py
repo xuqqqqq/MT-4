@@ -43,28 +43,6 @@ THREE_PAIR_PATTERNS = (
 )
 
 
-def _build_pair_patterns(size):
-    patterns = []
-
-    def rec(remaining, current):
-        if not remaining:
-            patterns.append(tuple(current))
-            return
-        first = remaining[0]
-        for pos in range(1, len(remaining)):
-            second = remaining[pos]
-            rec(
-                remaining[1:pos] + remaining[pos + 1:],
-                current + [(first, second)],
-            )
-
-    rec(list(range(size)), [])
-    return tuple(patterns)
-
-
-FOUR_PAIR_PATTERNS = _build_pair_patterns(8)
-
-
 class Candidate(object):
     __slots__ = ("mask", "task_str", "courier", "score", "p", "task_count")
 
@@ -776,9 +754,7 @@ def _matching_edge_value(problem, mask, mode, top_k):
     return _multi_offer_potential(problem, mask, top_k)
 
 
-def _make_matching_grouping(
-    problem, mode, top_k, threshold, noise, seed, three_opt=False, four_opt=False
-):
+def _make_matching_grouping(problem, mode, top_k, threshold, noise, seed, three_opt=False):
     rnd = random.Random(seed)
     edge_value = {}
     edges = []
@@ -906,76 +882,6 @@ def _make_matching_grouping(
                                 mate[b] = a
                             improved = True
                             break
-
-    # The high-noise 30-task family benefits from a wider matching rotation,
-    # but this is deliberately opt-in because it can hurt very-low-p cases.
-    if four_opt and problem.n_tasks <= 32:
-        improved = True
-        while improved:
-            improved = False
-            pairs = []
-            seen = set()
-            for i in range(problem.n_tasks):
-                j = mate[i]
-                if j >= 0 and i not in seen and j not in seen:
-                    pairs.append((min(i, j), max(i, j)))
-                    seen.add(i)
-                    seen.add(j)
-
-            for first in range(len(pairs)):
-                if improved:
-                    break
-                for second in range(first + 1, len(pairs)):
-                    if improved:
-                        break
-                    for third in range(second + 1, len(pairs)):
-                        if improved:
-                            break
-                        for fourth in range(third + 1, len(pairs)):
-                            selected = (
-                                pairs[first],
-                                pairs[second],
-                                pairs[third],
-                                pairs[fourth],
-                            )
-                            nodes = [
-                                selected[0][0], selected[0][1],
-                                selected[1][0], selected[1][1],
-                                selected[2][0], selected[2][1],
-                                selected[3][0], selected[3][1],
-                            ]
-                            old_value = 0.0
-                            for a, b in selected:
-                                old_value += edge_value.get((1 << a) | (1 << b), -1e100)
-
-                            best_value = old_value
-                            best_pairs = None
-                            for pattern in FOUR_PAIR_PATTERNS:
-                                trial_value = 0.0
-                                trial_pairs = []
-                                valid = True
-                                for left_pos, right_pos in pattern:
-                                    a = nodes[left_pos]
-                                    b = nodes[right_pos]
-                                    value = edge_value.get((1 << a) | (1 << b), -1e100)
-                                    if value <= -1e90:
-                                        valid = False
-                                        break
-                                    trial_value += value
-                                    trial_pairs.append((a, b))
-                                if valid and trial_value > best_value + 1e-9:
-                                    best_value = trial_value
-                                    best_pairs = trial_pairs
-
-                            if best_pairs is not None:
-                                for a, b in selected:
-                                    mate[a] = -1
-                                    mate[b] = -1
-                                for a, b in best_pairs:
-                                    mate[a] = b
-                                    mate[b] = a
-                                improved = True
-                                break
 
     groups = []
     used = 0
@@ -2444,14 +2350,6 @@ def solve(input_text: str) -> list:
     low_willingness = avg_willingness < 0.35
     very_low_willingness = avg_willingness < 0.28
     extreme_low_willingness = avg_willingness < 0.18
-    high_noise_like = (
-        avg_willingness >= 0.24
-        and avg_willingness < 0.35
-        and problem.n_tasks >= 25
-        and problem.n_tasks <= 32
-        and len(problem.all_couriers) >= problem.n_tasks * 2
-        and not scarce_couriers
-    )
     seed = 17
 
     if scarce_couriers or low_willingness:
@@ -2500,21 +2398,6 @@ def solve(input_text: str) -> list:
             )
             consider(groups, model, ensure_initial)
             seed += 13
-        if high_noise_like:
-            four_opt_matching_configs = (
-                ("potential_half", 3, 20.0, "prop", False),
-                ("potential_half", 3, 40.0, "prop", False),
-                ("potential_raw", 3, -80.0, "prop", False),
-                ("potential_gain", 3, -80.0, "prop", False),
-            )
-            for mode, top_k, threshold, model, ensure_initial in four_opt_matching_configs:
-                if time.time() >= deadline:
-                    break
-                groups = _make_matching_grouping(
-                    problem, mode, top_k, threshold, 0.0, seed, True, True
-                )
-                consider(groups, model, ensure_initial)
-                seed += 17
         if extreme_low_willingness:
             randomized_matching_configs = (
                 ("potential_half", 3, 20.0, 50.0, 151),
