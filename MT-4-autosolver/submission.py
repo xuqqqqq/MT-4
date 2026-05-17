@@ -1247,8 +1247,10 @@ def _local_subset_reassign_expected(problem, state, deadline, model):
     def group_value(offers):
         return _group_value_prop(offers, offers[0].task_count)
 
+    active_deadline = [deadline]
+
     def best_reassign(selected):
-        if time.time() >= deadline:
+        if time.time() >= active_deadline[0]:
             return None
 
         masks = [current[idx][0].mask for idx in selected]
@@ -1303,7 +1305,7 @@ def _local_subset_reassign_expected(problem, state, deadline, model):
         # faster than recursive assignment and lets the large cases afford a
         # wider neighborhood.
         for first in range(1, full):
-            if time.time() >= deadline:
+            if time.time() >= active_deadline[0]:
                 break
             rest = full ^ first
             second = rest
@@ -1382,7 +1384,11 @@ def _local_subset_reassign_expected(problem, state, deadline, model):
 
     changed_indices = []
     move_count = 0
-    while time.time() < deadline and move_count < 5:
+    scan_deadline = deadline
+    if problem.n_tasks >= 36 and deadline - time.time() > 0.16:
+        scan_deadline = deadline - 0.08
+    active_deadline[0] = scan_deadline
+    while time.time() < scan_deadline and move_count < 5:
         values = []
         for idx in range(len(current)):
             values.append((group_value(current[idx]), idx))
@@ -1443,6 +1449,7 @@ def _local_subset_reassign_expected(problem, state, deadline, model):
         changed_indices = list(selected)
         move_count += 1
 
+    active_deadline[0] = deadline
     apply_rank_patterns()
 
     output = []
