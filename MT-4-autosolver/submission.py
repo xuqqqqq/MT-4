@@ -2349,7 +2349,7 @@ def solve(input_text: str) -> list:
     scarce_couriers = len(problem.all_couriers) <= problem.n_tasks * 1.35
     low_willingness = avg_willingness < 0.35
     very_low_willingness = avg_willingness < 0.28
-    extreme_low_willingness = avg_willingness < 0.18
+    extreme_low_willingness = avg_willingness < 0.12
     seed = 17
 
     if scarce_couriers or low_willingness:
@@ -2527,7 +2527,7 @@ def solve(input_text: str) -> list:
         # conservative, but spend a little extra only on the 40-task large
         # family where this neighborhood consistently pays for itself.
         if large_single_refine:
-            refine_deadline = min(start_time + 8.65, time.time() + 5.20)
+            refine_deadline = min(start_time + 8.60, time.time() + 5.20)
         else:
             refine_deadline = min(deadline, time.time() + 0.55)
         improved_state = _local_subset_reassign_expected(

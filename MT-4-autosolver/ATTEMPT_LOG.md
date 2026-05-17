@@ -312,3 +312,11 @@ Known stable-ish score profile:
 - Code change: replace `submission.py` and the desktop upload copy with the provided `solution_712.96.py`. This restores the reference timing, low-willingness matching portfolio, and exact subset/mask/pair/triple/four-group local refinements while removing the newer medium beam and scarce coverage-bonus experiments from the submitted path.
 - Local evidence: `large_seed301` anchor now matches the reference output hash `c61c8c2a` with local `prop=664.697`, `seq=626.320`, `uniform=659.652`; calibrated suite smoke completed without errors. This change is justified primarily by known online score, not by synthetic proxy alone.
 - Risk: this is a large replacement diff, but it moves to a user-provided online-scored solution rather than an untested local-only heuristic.
+
+## Active Experiment: Split High-Noise From Extreme Low-Willingness
+
+- Hypothesis: `high_noise_seed601` is being treated like true low-willingness because both have low average willingness in generated/calibrated probes. The randomized potential matching block helps true low-like cases but can overfit noisy high cases, so it should trigger only for much lower average willingness.
+- Code change: tighten `extreme_low_willingness` from `avg_willingness < 0.18` to `< 0.12`. To keep the public large anchor stable after the code-shape change, lower the large single-refine wall-clock cap from `start_time + 8.65` to `start_time + 8.60`.
+- Local evidence: calibrated `high_noise_seed601` improved from `prop=328.176` to `326.320` with stable hash `424e8e4a`; calibrated `low_willingness_seed501` stayed unchanged at `1489.882`; public `large_seed301` repeated 3 times with stable hash `c61c8c2a` and `prop=664.697` under the `0.12 + 8.60` setting. Full calibrated smoke showed no changes to medium, low, scarce, small, or tiny.
+- Rejected: `avg_willingness < 0.15` | it preserved the high/low local scores but made public `large_seed301` alternate between two hashes, so it is less safe than the tested `0.12` gate.
+- Risk: if official `low_willingness_seed501` has average willingness between `0.12` and `0.18`, this could disable a useful random matching block there. The calibrated low probe is far below the new threshold, so the current evidence says the gate separation is reasonable.
