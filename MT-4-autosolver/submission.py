@@ -902,6 +902,75 @@ def _make_matching_grouping(problem, mode, top_k, threshold, noise, seed, three_
     return _groups_key(groups)
 
 
+def _make_beam_matching_grouping(problem, mode, top_k, width, deadline):
+    edge_value = {}
+    for mask in problem.pair_masks:
+        pair_bits = _bits(mask)
+        if len(pair_bits) != 2:
+            continue
+        value = _matching_edge_value(problem, mask, mode, top_k)
+        left, right = pair_bits
+        edge_value[(left, right)] = value
+        edge_value[(right, left)] = value
+
+    full = (1 << problem.n_tasks) - 1
+    states = {0: (0.0, ())}
+    while states and time.time() < deadline:
+        next_states = {}
+        finished = True
+        for used, item in states.items():
+            value, pairs = item
+            if used == full:
+                old = next_states.get(used)
+                if old is None or value > old[0]:
+                    next_states[used] = item
+                continue
+
+            finished = False
+            first = 0
+            while used & (1 << first):
+                first += 1
+
+            for other in range(first + 1, problem.n_tasks):
+                other_bit = 1 << other
+                if used & other_bit:
+                    continue
+                pair_value = edge_value.get((first, other), -1e100)
+                if pair_value <= -1e90:
+                    continue
+                mask = (1 << first) | other_bit
+                new_used = used | mask
+                new_value = value + pair_value
+                old = next_states.get(new_used)
+                if old is None or new_value > old[0]:
+                    next_states[new_used] = (new_value, pairs + (mask,))
+
+        if finished:
+            states = next_states
+            break
+        if len(next_states) > width:
+            ranked = sorted(next_states.items(), key=lambda x: x[1][0], reverse=True)
+            states = dict(ranked[:width])
+        else:
+            states = next_states
+
+    if not states:
+        return None
+
+    best = max(states.values(), key=lambda x: x[0])
+    used = 0
+    groups = []
+    for mask in best[1]:
+        groups.append(mask)
+        used |= mask
+    for i in range(problem.n_tasks):
+        bit = 1 << i
+        if not (used & bit) and bit in problem.by_mask:
+            groups.append(bit)
+            used |= bit
+    return _groups_key(groups)
+
+
 def _candidate_saving_assignment(problem):
     """Sparse-courier fallback: choose the best task-bundle/courier triples."""
     rows = []
@@ -2349,7 +2418,20 @@ def solve(input_text: str) -> list:
     scarce_couriers = len(problem.all_couriers) <= problem.n_tasks * 1.35
     low_willingness = avg_willingness < 0.35
     very_low_willingness = avg_willingness < 0.28
-    extreme_low_willingness = avg_willingness < 0.18
+    single_willingness = 0.0
+    if avg_willingness < 0.18 and problem.n_tasks >= 25 and problem.n_tasks <= 32:
+        single_willingness_count = 0
+        for mask, candidates in problem.by_mask.items():
+            if _bit_count(mask) != 1:
+                continue
+            for cand in candidates:
+                single_willingness += cand.p
+                single_willingness_count += 1
+        if single_willingness_count:
+            single_willingness /= single_willingness_count
+    extreme_low_willingness = avg_willingness < 0.12 or (
+        avg_willingness < 0.18 and single_willingness < 0.14
+    )
     seed = 17
 
     if scarce_couriers or low_willingness:
@@ -2399,6 +2481,19 @@ def solve(input_text: str) -> list:
             consider(groups, model, ensure_initial)
             seed += 13
         if extreme_low_willingness:
+            beam_configs = (
+                ("potential_raw", 3, 100, "seq", True),
+                ("potential_raw", 3, 1600, "prop", False),
+                ("potential_gain", 6, 800, "prop", False),
+            )
+            for mode, top_k, width, model, ensure_initial in beam_configs:
+                if time.time() >= deadline:
+                    break
+                groups = _make_beam_matching_grouping(
+                    problem, mode, top_k, width, min(deadline, time.time() + 0.45)
+                )
+                if groups is not None:
+                    consider(groups, model, ensure_initial)
             randomized_matching_configs = (
                 ("potential_half", 3, 20.0, 50.0, 151),
                 ("potential_half", 3, 20.0, 90.0, 151),
