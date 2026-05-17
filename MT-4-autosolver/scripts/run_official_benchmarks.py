@@ -89,7 +89,7 @@ def main(argv=None):
                 rows.append(row)
                 print(
                     "{solver:24s} {case:28s} "
-                    "prop={prop:9.3f} seq={seq:9.3f} "
+                    "prop={prop:9.3f} seq={seq:9.3f} uni={uni:9.3f} "
                     "covered={covered:3d}/{tasks:3d} "
                     "offers={offers:3d} time={time_ms:7.1f}ms "
                     "hash={hash_value} {error}".format(
@@ -97,6 +97,7 @@ def main(argv=None):
                         case=case_path.stem,
                         prop=row["prop_penalty"],
                         seq=row["seq_penalty"],
+                        uni=row["uniform_penalty"],
                         covered=row["covered_tasks"],
                         tasks=row["task_count"],
                         offers=row["offer_count"],
@@ -153,6 +154,7 @@ def build_repeat_stats(rows):
         group = grouped[key]
         props = sorted(float(item["prop_penalty"]) for item in group)
         seqs = sorted(float(item["seq_penalty"]) for item in group)
+        uniforms = sorted(float(item["uniform_penalty"]) for item in group)
         times = sorted(float(item["elapsed_ms"]) for item in group)
         hashes = sorted(set(item["output_hash"][:8] for item in group))
         stats.append(
@@ -166,6 +168,9 @@ def build_repeat_stats(rows):
                 "seq_min": round(seqs[0], 6),
                 "seq_median": round(median(seqs), 6),
                 "seq_max": round(seqs[-1], 6),
+                "uniform_min": round(uniforms[0], 6),
+                "uniform_median": round(median(uniforms), 6),
+                "uniform_max": round(uniforms[-1], 6),
                 "time_min_ms": round(times[0], 3),
                 "time_median_ms": round(median(times), 3),
                 "time_max_ms": round(times[-1], 3),
@@ -260,6 +265,10 @@ def evaluate_result(candidates, result):
     used_couriers = set()
     prop_penalty = 0.0
     seq_penalty = 0.0
+    uniform_penalty = 0.0
+    best_score_penalty = 0.0
+    expected_accepted_tasks = 0.0
+    expected_rejected_tasks = 0.0
     total_score = 0.0
     offer_count = 0
     group_count = 0
@@ -292,6 +301,8 @@ def evaluate_result(candidates, result):
         p_sum = 0.0
         weighted_score = 0.0
         seq_group = 0.0
+        score_sum = 0.0
+        best_score = None
         for item in sorted(offers, key=lambda value: (value["score"], -value["p"], value["courier"])):
             courier = item["courier"]
             if courier in used_couriers:
@@ -303,23 +314,39 @@ def evaluate_result(candidates, result):
             weighted_score += p * score
             seq_group += reject_prob * p * score
             reject_prob *= max(0.0, min(1.0, 1.0 - p))
+            score_sum += score
+            if best_score is None or score < best_score:
+                best_score = score
             total_score += score
             offer_count += 1
 
         task_group_count = len(task_tuple)
         avg_score = weighted_score / p_sum if p_sum > 0.0 else FAIL_PENALTY * task_group_count
+        uniform_score = score_sum / len(offers)
+        accept_prob = 1.0 - reject_prob
         prop_penalty += (1.0 - reject_prob) * avg_score + reject_prob * FAIL_PENALTY * task_group_count
         seq_penalty += seq_group + reject_prob * FAIL_PENALTY * task_group_count
+        uniform_penalty += accept_prob * uniform_score + reject_prob * FAIL_PENALTY * task_group_count
+        best_score_penalty += accept_prob * best_score + reject_prob * FAIL_PENALTY * task_group_count
+        expected_accepted_tasks += task_group_count * accept_prob
+        expected_rejected_tasks += task_group_count * reject_prob
 
     uncovered = max(0, task_count - len(used_tasks))
     prop_penalty += FAIL_PENALTY * uncovered
     seq_penalty += FAIL_PENALTY * uncovered
+    uniform_penalty += FAIL_PENALTY * uncovered
+    best_score_penalty += FAIL_PENALTY * uncovered
+    expected_rejected_tasks += uncovered
     return {
         "prop_penalty": round(prop_penalty, 6),
         "seq_penalty": round(seq_penalty, 6),
+        "uniform_penalty": round(uniform_penalty, 6),
+        "best_score_penalty": round(best_score_penalty, 6),
         "covered_tasks": len(used_tasks),
         "task_count": task_count,
         "uncovered_tasks": uncovered,
+        "expected_accepted_tasks": round(expected_accepted_tasks, 6),
+        "expected_rejected_tasks": round(expected_rejected_tasks, 6),
         "group_count": group_count,
         "offer_count": offer_count,
         "total_score": round(total_score, 6),
@@ -332,9 +359,13 @@ def empty_metrics():
     return {
         "prop_penalty": 0.0,
         "seq_penalty": 0.0,
+        "uniform_penalty": 0.0,
+        "best_score_penalty": 0.0,
         "covered_tasks": 0,
         "task_count": 0,
         "uncovered_tasks": 0,
+        "expected_accepted_tasks": 0.0,
+        "expected_rejected_tasks": 0.0,
         "group_count": 0,
         "offer_count": 0,
         "total_score": 0.0,

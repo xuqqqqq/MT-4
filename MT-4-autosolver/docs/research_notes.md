@@ -67,6 +67,17 @@ External-method checkpoints:
   about 44 penalty points.
 - The 715.57 jump came from structural repartition/local finishing, not from
   more seed candidates.
+- The 712.96 reference did not use a completely different official objective:
+  its proportional and sequential expected-value formulas match the local
+  harness.  The useful extra diagnostic is a `uniform accepted` proxy, where an
+  accepted multi-offer group uses the arithmetic mean of offered scores instead
+  of probability-weighted mean score.  This proxy sometimes tracks public
+  feedback better, but direct optimization against it can overfit, so it should
+  be used as a calibration signal rather than replacing `prop`.
+- `scripts/run_official_benchmarks.py` now reports `prop`, `seq`, `uniform`,
+  best-offer, and expected accepted/rejected task counts.  Use
+  `scripts/proxy_fit_report.py` with known online scores to decide which proxy
+  is currently most trustworthy before promoting a solver change.
 
 ## No-Repeat List
 
@@ -81,6 +92,10 @@ External-method checkpoints:
 
 - Build calibrated validation cases by matching the current solver's online
   score table more closely than the current hidden-like generator.
+- Keep a small online-score CSV for every submitted solver, then run
+  `scripts/proxy_fit_report.py` against the benchmark summary.  If the best
+  proxy changes by case family, gate future heuristics by family instead of
+  assuming one local objective is globally accurate.
 - Try price-guided single-task assignment for complete dense cases, but require
   a public `large_seed301` improvement before touching submission.
 - Try ejection-chain repair for scarce cases where one uncovered task can enter
