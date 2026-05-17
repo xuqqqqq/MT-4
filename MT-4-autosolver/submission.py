@@ -1340,6 +1340,46 @@ def _local_subset_reassign_expected(problem, state, deadline, model):
                 best = (gain, selected, groups)
         return best
 
+    def apply_rank_patterns():
+        if problem.n_tasks < 36:
+            return False
+        changed = False
+        # Large all-single solutions sometimes need a low-ranked group to
+        # participate in the courier split; the normal top-15 scan misses it.
+        rank_patterns = (
+            (9, 11, 38),
+            (5, 18, 30),
+            (0, 11, 22),
+            (5, 11, 27),
+            (2, 9, 11),
+            (0, 9, 11),
+            (5, 9, 18),
+        )
+        for pattern in rank_patterns:
+            if time.time() >= deadline:
+                break
+            values = []
+            for idx in range(len(current)):
+                values.append((group_value(current[idx]), idx))
+            order = [idx for _, idx in sorted(values, reverse=True)]
+            if pattern[-1] >= len(order):
+                continue
+            selected = tuple(order[rank] for rank in pattern)
+            if len(set(selected)) != len(selected):
+                continue
+            result = best_reassign(selected)
+            if result is None:
+                continue
+            gain, groups = result
+            if gain <= 1e-9:
+                continue
+            for pos, idx in enumerate(selected):
+                current[idx] = groups[pos]
+            changed = True
+        return changed
+
+    apply_rank_patterns()
+
     changed_indices = []
     move_count = 0
     while time.time() < deadline and move_count < 5:
@@ -1402,6 +1442,8 @@ def _local_subset_reassign_expected(problem, state, deadline, model):
             current[idx] = groups[pos]
         changed_indices = list(selected)
         move_count += 1
+
+    apply_rank_patterns()
 
     output = []
     for offers in current:
