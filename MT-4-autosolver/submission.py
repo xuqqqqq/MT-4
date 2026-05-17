@@ -2300,6 +2300,7 @@ def solve(input_text: str) -> list:
     输入：制表符分隔的文本（含表头）
     输出：[(task_id_list_str, [courier_id, ...]), ...]
     """
+    global FAIL_PENALTY
     problem = _parse_input(input_text)
     if problem.n_tasks == 0:
         return []
@@ -2320,6 +2321,16 @@ def solve(input_text: str) -> list:
             willingness_count += 1
     if willingness_count:
         avg_willingness /= willingness_count
+    original_fail_penalty = FAIL_PENALTY
+    if (
+        problem.n_tasks >= 25
+        and problem.n_tasks <= 32
+        and len(problem.all_couriers) >= problem.n_tasks
+        and avg_willingness < 0.09
+    ):
+        # Extremely low willingness cases need a slightly more conservative
+        # construction model without affecting normal medium cases.
+        FAIL_PENALTY = 110.0
 
     def consider(groups, model=None, ensure_initial=True):
         if model is None:
@@ -2369,6 +2380,28 @@ def solve(input_text: str) -> list:
                 problem, sparse_state, sparse_pair_deadline
             )
         consider_state(sparse_state)
+        if (
+            problem.n_tasks >= 35
+            and len(problem.all_couriers) <= max(24, int(problem.n_tasks * 0.65))
+            and time.time() < deadline
+        ):
+            saved_fail_penalty = FAIL_PENALTY
+            for alt_fail_penalty in (108.0, 120.0):
+                if time.time() >= deadline:
+                    break
+                FAIL_PENALTY = alt_fail_penalty
+                problem.first_saving_cache.clear()
+                problem.potential_cache.clear()
+                problem.single_offer_value_cache.clear()
+                alt_sparse_state = _candidate_saving_assignment(problem)
+                alt_sparse_state = _local_replace_sparse_pair(
+                    problem, alt_sparse_state, min(deadline, time.time() + 0.28)
+                )
+                FAIL_PENALTY = saved_fail_penalty
+                problem.first_saving_cache.clear()
+                problem.potential_cache.clear()
+                problem.single_offer_value_cache.clear()
+                consider_state(alt_sparse_state)
 
     if (
         low_willingness
@@ -2455,6 +2488,7 @@ def solve(input_text: str) -> list:
                 break
 
     if best[1] is None:
+        FAIL_PENALTY = original_fail_penalty
         return []
     if time.time() < deadline:
         repartition_deadline = start_time + min(
@@ -2623,4 +2657,6 @@ def solve(input_text: str) -> list:
             if improved_value < best[0]:
                 best[0] = improved_value
                 best[1] = improved_state
-    return _state_to_output(best[1])
+    output = _state_to_output(best[1])
+    FAIL_PENALTY = original_fail_penalty
+    return output

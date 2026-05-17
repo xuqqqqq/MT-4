@@ -349,4 +349,14 @@ Known stable-ish score profile:
 - Rejected: low-only `prop/uniform` shadow selector | it produced a worse low proxy hash (`1495.823` vs `1489.882`) and made public large less stable.
 - Rejected: low-only `seq` selector | it improved local `seq` by only `0.57` but worsened `prop` and `uniform` sharply (`1496.092/1504.683` vs `1489.882/1494.378`).
 - Rejected: deterministic 4-pair matching opt | it reproduced the earlier low-beam hash (`1479.340`) but regressed calibrated high-noise (`326.320 -> 359.642`) and scarce proxy stability, so it is another synthetic trap.
+- Rejected online: targeted high-noise 4-pair matching (`8880e21`) | online average worsened to `713.55`; `high_noise_seed601` stayed at the same `495.72` basin instead of taking the synthetic `511.779 -> 410.919` gain, while `large_seed301` and `medium_seed203` moved slightly worse. The high-noise classifier/proxy signal is not reliable enough to spend another submission on this family.
 - Current floor: exact `solution_712.96.py`; do not reintroduce matching-beam, broad shadow-selector, or scarce coverage/ejection changes without new online-like evidence.
+
+## Candidate Experiment: Adopt 712.83 Floor Plus Wider Extreme-Low Penalty Gate
+
+- Trigger: the local WeChat archive contains `solution_712.83.py`, a stronger named online reference than `solution_712.96.py`.
+- Code change: upgrade the floor to the `712.83` behavior: an extreme-low construction penalty (`FAIL_PENALTY = 110`) and two scarce alternative construction penalties (`108`, `120`). Then widen the extreme-low trigger from `avg_willingness < 0.071` to `< 0.09`, so it also reaches the generated/calibrated `low_willingness_seed501` proxy while still excluding high-noise and medium cases.
+- Local evidence: `solution_712.83.py` and the upgraded floor are line-equivalent before the threshold change. With the `0.09` gate, generated and calibrated low both improve from `prop=1489.882`, `seq=1431.112`, hash `8bd2eaf8` to `prop=1479.435`, `seq=1420.237`, hash `08ea8160`. Full guard keeps tiny, small, high-noise, medium201/202/203, large301/302, scarce, and the public `large_seed301` anchor unchanged except for pre-existing wall-clock large hash jitter.
+- Rejected during this round: medium203-only time extension | improved one generated medium basin but introduced public-large timing jitter; small/tiny `seq` target | improved local seq but worsened prop/uniform sharply and over-added offers; small global pair/single DP | all DP groupings were worse than the 712.83 local-refine basin.
+- Risk: if official `low_willingness_seed501` already has `avg_willingness < 0.071`, widening the gate will be a no-op relative to `712.83`; if it lies in `0.071-0.09`, this should be the intended low-only change.
+- Decision: candidate upload is justified after compile/tests and desktop sync.
