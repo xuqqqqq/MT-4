@@ -1267,6 +1267,204 @@ def _anneal_single_task_reassign(p, state, deadline, seed, max_iters):
             output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
     return output
 
+def _tabu_single_task_reassign(p, state, deadline, max_steps, group_limit, tenure):
+    current = [list(offers) for offers in state if offers]
+    if len(current) < 8:
+        return current
+    if len(p.all_couriers) < p.n_tasks:
+        return current
+    group_count = len(current)
+    masks = []
+    task_counts = []
+    for offers in current:
+        if not offers:
+            return current
+        masks.append(offers[0].mask)
+        task_counts.append(offers[0].task_count)
+
+    def value_from_stats(reject_prob, p_sum, weighted_score, task_count):
+        if p_sum <= 1e-15:
+            return FAIL_PENALTY * task_count
+        avg_score = weighted_score / p_sum
+        return (1.0 - reject_prob) * avg_score + reject_prob * FAIL_PENALTY * task_count
+
+    reject_probs = []
+    p_sums = []
+    weighted_scores = []
+    values = []
+    for offers in current:
+        reject_prob = 1.0
+        p_sum = 0.0
+        weighted_score = 0.0
+        for cand in offers:
+            reject_prob *= max(0.0, min(1.0, 1.0 - cand.p))
+            p_sum += cand.p
+            weighted_score += cand.p * cand.score
+        reject_probs.append(reject_prob)
+        p_sums.append(p_sum)
+        weighted_scores.append(weighted_score)
+        values.append(value_from_stats(reject_prob, p_sum, weighted_score, offers[0].task_count))
+    current_value = sum(values)
+    best_value = current_value
+    best_state = [list(offers) for offers in current]
+    tabu_until = {}
+    no_improve = 0
+    if group_limit <= 0 or group_limit > group_count:
+        group_limit = group_count
+
+    for step in range(max_steps):
+        if time.time() >= deadline:
+            break
+        order = list(range(group_count))
+        order.sort(key=lambda i: (-values[i], -len(current[i]), masks[i]))
+        active = order[:group_limit]
+        active_set = set(active)
+        for i in range(group_count):
+            if len(current[i]) > 1 and i not in active_set:
+                active.append(i)
+                active_set.add(i)
+                if len(active) >= group_limit + 4:
+                    break
+        move = None
+        best_delta = 1e+100
+        for left in active:
+            if time.time() >= deadline:
+                break
+            if len(current[left]) <= 1:
+                continue
+            left_mask = masks[left]
+            for left_pos, moving in enumerate(current[left]):
+                old_keep = max(0.0, min(1.0, 1.0 - moving.p))
+                if old_keep <= 1e-15:
+                    continue
+                new_left_reject = reject_probs[left] / old_keep
+                new_left_p_sum = p_sums[left] - moving.p
+                new_left_weighted = weighted_scores[left] - moving.p * moving.score
+                new_left_value = value_from_stats(new_left_reject, new_left_p_sum, new_left_weighted, task_counts[left])
+                for right in active:
+                    if right == left:
+                        continue
+                    right_offer = p.by_mask_courier.get(masks[right], {}).get(moving.courier)
+                    if right_offer is None:
+                        continue
+                    right_keep = max(0.0, min(1.0, 1.0 - right_offer.p))
+                    new_right_reject = reject_probs[right] * right_keep
+                    new_right_p_sum = p_sums[right] + right_offer.p
+                    new_right_weighted = weighted_scores[right] + right_offer.p * right_offer.score
+                    new_right_value = value_from_stats(new_right_reject, new_right_p_sum, new_right_weighted, task_counts[right])
+                    delta = new_left_value + new_right_value - values[left] - values[right]
+                    key = ('m', moving.courier, left_mask, masks[right])
+                    if tabu_until.get(key, -1) > step and current_value + delta >= best_value - 1e-09:
+                        continue
+                    if delta < best_delta:
+                        best_delta = delta
+                        move = ('m', left, right, left_pos, moving, right_offer,
+                                new_left_reject, new_left_p_sum, new_left_weighted, new_left_value,
+                                new_right_reject, new_right_p_sum, new_right_weighted, new_right_value)
+        for ai in range(len(active)):
+            if time.time() >= deadline:
+                break
+            left = active[ai]
+            for bi in range(ai + 1, len(active)):
+                right = active[bi]
+                for left_pos, left_cand in enumerate(current[left]):
+                    left_old_keep = max(0.0, min(1.0, 1.0 - left_cand.p))
+                    if left_old_keep <= 1e-15:
+                        continue
+                    for right_pos, right_cand in enumerate(current[right]):
+                        right_old_keep = max(0.0, min(1.0, 1.0 - right_cand.p))
+                        if right_old_keep <= 1e-15:
+                            continue
+                        new_left = p.by_mask_courier.get(masks[left], {}).get(right_cand.courier)
+                        new_right = p.by_mask_courier.get(masks[right], {}).get(left_cand.courier)
+                        if new_left is None or new_right is None:
+                            continue
+                        left_new_keep = max(0.0, min(1.0, 1.0 - new_left.p))
+                        right_new_keep = max(0.0, min(1.0, 1.0 - new_right.p))
+                        new_left_reject = reject_probs[left] / left_old_keep * left_new_keep
+                        new_left_p_sum = p_sums[left] - left_cand.p + new_left.p
+                        new_left_weighted = weighted_scores[left] - left_cand.p * left_cand.score + new_left.p * new_left.score
+                        new_left_value = value_from_stats(new_left_reject, new_left_p_sum, new_left_weighted, task_counts[left])
+                        new_right_reject = reject_probs[right] / right_old_keep * right_new_keep
+                        new_right_p_sum = p_sums[right] - right_cand.p + new_right.p
+                        new_right_weighted = weighted_scores[right] - right_cand.p * right_cand.score + new_right.p * new_right.score
+                        new_right_value = value_from_stats(new_right_reject, new_right_p_sum, new_right_weighted, task_counts[right])
+                        delta = new_left_value + new_right_value - values[left] - values[right]
+                        key = ('s', left_cand.courier, right_cand.courier, masks[left], masks[right])
+                        if tabu_until.get(key, -1) > step and current_value + delta >= best_value - 1e-09:
+                            continue
+                        if delta < best_delta:
+                            best_delta = delta
+                            move = ('s', left, right, left_pos, right_pos, left_cand, right_cand, new_left, new_right,
+                                    new_left_reject, new_left_p_sum, new_left_weighted, new_left_value,
+                                    new_right_reject, new_right_p_sum, new_right_weighted, new_right_value)
+        if move is None:
+            break
+        if move[0] == 'm':
+            _, left, right, left_pos, moving, right_offer, lr, lp, lw, lv, rr, rp, rw, rv = move
+            left_offers = current[left][:left_pos] + current[left][left_pos + 1:]
+            right_offers = current[right] + [right_offer]
+            current[left] = left_offers
+            current[right] = right_offers
+            reject_probs[left] = lr
+            p_sums[left] = lp
+            weighted_scores[left] = lw
+            values[left] = lv
+            reject_probs[right] = rr
+            p_sums[right] = rp
+            weighted_scores[right] = rw
+            values[right] = rv
+            tabu_until[('m', moving.courier, masks[right], masks[left])] = step + tenure
+        else:
+            _, left, right, left_pos, right_pos, left_cand, right_cand, new_left, new_right, lr, lp, lw, lv, rr, rp, rw, rv = move
+            left_offers = list(current[left])
+            right_offers = list(current[right])
+            left_offers[left_pos] = new_left
+            right_offers[right_pos] = new_right
+            current[left] = left_offers
+            current[right] = right_offers
+            reject_probs[left] = lr
+            p_sums[left] = lp
+            weighted_scores[left] = lw
+            values[left] = lv
+            reject_probs[right] = rr
+            p_sums[right] = rp
+            weighted_scores[right] = rw
+            values[right] = rv
+            tabu_until[('s', right_cand.courier, left_cand.courier, masks[left], masks[right])] = step + tenure
+        current_value += best_delta
+        if current_value < best_value - 1e-09:
+            best_value = current_value
+            best_state = [list(offers) for offers in current]
+            no_improve = 0
+        else:
+            no_improve += 1
+            if no_improve >= 32 and current_value > best_value + 60.0:
+                current = [list(offers) for offers in best_state]
+                reject_probs = []
+                p_sums = []
+                weighted_scores = []
+                values = []
+                for offers in current:
+                    reject_prob = 1.0
+                    p_sum = 0.0
+                    weighted_score = 0.0
+                    for cand in offers:
+                        reject_prob *= max(0.0, min(1.0, 1.0 - cand.p))
+                        p_sum += cand.p
+                        weighted_score += cand.p * cand.score
+                    reject_probs.append(reject_prob)
+                    p_sums.append(p_sum)
+                    weighted_scores.append(weighted_score)
+                    values.append(value_from_stats(reject_prob, p_sum, weighted_score, offers[0].task_count))
+                current_value = sum(values)
+                no_improve = 0
+    output = []
+    for offers in best_state:
+        if offers:
+            output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
+    return output
+
 def _local_mask_subset_reassign_expected(p, state, deadline, model):
     current = [list(offers) for offers in state if offers]
     if model != 'prop' or len(current) < 3:
@@ -2201,6 +2399,35 @@ def solve(input_text: str) -> list:
             if improved_value < best[0]:
                 best[0] = improved_value
                 best[1] = improved_state
+    tabu_refine = tm == 'prop' and len(p.all_couriers) >= p.n_tasks and ((p.n_tasks >= 36) or (very_low_willingness and p.n_tasks >= 25 and p.n_tasks <= 32))
+    if tabu_refine and time.time() < st + 8.85:
+        if p.n_tasks >= 36:
+            tabu_deadline = min(st + 8.95, time.time() + 1.30)
+            tabu_steps = 360
+            tabu_group_limit = 32
+            tabu_tenure = 9
+        else:
+            tabu_deadline = min(st + 8.35, time.time() + 0.62)
+            tabu_steps = 180
+            tabu_group_limit = 12
+            tabu_tenure = 7
+        if tabu_deadline > time.time() + 0.05:
+            if p.n_tasks >= 36:
+                improved_state = _tabu_single_task_reassign(p, best[1], tabu_deadline, tabu_steps, tabu_group_limit, tabu_tenure)
+                improved_value = _state_model_value(p, improved_state, tm)
+                if improved_value < best[0]:
+                    best[0] = improved_value
+                    best[1] = improved_state
+            else:
+                saved_fail_penalty = FAIL_PENALTY
+                FAIL_PENALTY = 100.0
+                before_value = _state_model_value(p, best[1], tm)
+                improved_state = _tabu_single_task_reassign(p, best[1], tabu_deadline, tabu_steps, tabu_group_limit, tabu_tenure)
+                improved_value = _state_model_value(p, improved_state, tm)
+                FAIL_PENALTY = saved_fail_penalty
+                if improved_value < before_value:
+                    agent.bs = improved_state
+                    agent.bv = _state_model_value(p, improved_state, tm)
     output = _state_to_output(best[1])
     FAIL_PENALTY = original_fail_penalty
     return output
