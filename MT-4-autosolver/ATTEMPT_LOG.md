@@ -405,3 +405,10 @@ Known stable-ish score profile:
 - Risk: this is still mostly a large301 stability patch, so expected online gain is modest. Do not spend more submissions on this line unless the online large rows move by more than the local median suggests.
 - Online evidence: user reported the result stayed around `712.88`, worse than the remembered `712.83` reference floor.
 - Decision: revert both the rank-pattern probe and the tail-time reserve from the submitted file. The repository submission should match the provided `solution_712.83.py` floor before any further structural experiment.
+
+## Active Floor: Adopt 710.71 Reference Code
+
+- Trigger: user provided `代码.txt`, an online-scored solver with average `710.71`, improving the previous floor mainly on `large_seed301=661.00`, `large_seed302=628.48`, and medium cases (`485.90/523.10/499.76`) while keeping `low_willingness_seed501=1803.15` and `scarce_couriers_seed401=1562.89`.
+- Code change: replace `submission.py` and the desktop upload copy with the provided file byte-for-byte. The new floor introduces an agent wrapper, `by_mask_courier` cache, sparse uncovered LNS, and annealed single-task reassign neighborhoods.
+- Local evidence: the file compiles and parses under Python 3.5/3.6 AST. A local comparison confirms it changes high-noise/large/low/medium basins, but local proxy scores still do not fully explain the online gains, so the online score is treated as authoritative.
+- Decision: treat `代码.txt` / `710.71` as the new floor. Further changes should target remaining gaps (`low_willingness_seed501`, `scarce_couriers_seed401`, and high-noise) without disturbing the large/medium anneal paths.
