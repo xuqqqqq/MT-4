@@ -89,7 +89,7 @@ def main(argv=None):
                 rows.append(row)
                 print(
                     "{solver:24s} {case:28s} "
-                    "prop={prop:9.3f} seq={seq:9.3f} uni={uni:9.3f} "
+                    "prop={prop:9.3f} seq={seq:9.3f} uni={uni:9.3f} submean={submean:9.3f} "
                     "covered={covered:3d}/{tasks:3d} "
                     "offers={offers:3d} time={time_ms:7.1f}ms "
                     "hash={hash_value} {error}".format(
@@ -98,6 +98,7 @@ def main(argv=None):
                         prop=row["prop_penalty"],
                         seq=row["seq_penalty"],
                         uni=row["uniform_penalty"],
+                        submean=row["subset_mean_penalty"],
                         covered=row["covered_tasks"],
                         tasks=row["task_count"],
                         offers=row["offer_count"],
@@ -155,6 +156,7 @@ def build_repeat_stats(rows):
         props = sorted(float(item["prop_penalty"]) for item in group)
         seqs = sorted(float(item["seq_penalty"]) for item in group)
         uniforms = sorted(float(item["uniform_penalty"]) for item in group)
+        subset_means = sorted(float(item["subset_mean_penalty"]) for item in group)
         times = sorted(float(item["elapsed_ms"]) for item in group)
         hashes = sorted(set(item["output_hash"][:8] for item in group))
         stats.append(
@@ -171,6 +173,9 @@ def build_repeat_stats(rows):
                 "uniform_min": round(uniforms[0], 6),
                 "uniform_median": round(median(uniforms), 6),
                 "uniform_max": round(uniforms[-1], 6),
+                "subset_mean_min": round(subset_means[0], 6),
+                "subset_mean_median": round(median(subset_means), 6),
+                "subset_mean_max": round(subset_means[-1], 6),
                 "time_min_ms": round(times[0], 3),
                 "time_median_ms": round(median(times), 3),
                 "time_max_ms": round(times[-1], 3),
@@ -266,6 +271,7 @@ def evaluate_result(candidates, result):
     prop_penalty = 0.0
     seq_penalty = 0.0
     uniform_penalty = 0.0
+    subset_mean_penalty = 0.0
     best_score_penalty = 0.0
     expected_accepted_tasks = 0.0
     expected_rejected_tasks = 0.0
@@ -327,6 +333,7 @@ def evaluate_result(candidates, result):
         prop_penalty += (1.0 - reject_prob) * avg_score + reject_prob * FAIL_PENALTY * task_group_count
         seq_penalty += seq_group + reject_prob * FAIL_PENALTY * task_group_count
         uniform_penalty += accept_prob * uniform_score + reject_prob * FAIL_PENALTY * task_group_count
+        subset_mean_penalty += accepted_subset_mean_score(offers) + reject_prob * FAIL_PENALTY * task_group_count
         best_score_penalty += accept_prob * best_score + reject_prob * FAIL_PENALTY * task_group_count
         expected_accepted_tasks += task_group_count * accept_prob
         expected_rejected_tasks += task_group_count * reject_prob
@@ -335,12 +342,14 @@ def evaluate_result(candidates, result):
     prop_penalty += FAIL_PENALTY * uncovered
     seq_penalty += FAIL_PENALTY * uncovered
     uniform_penalty += FAIL_PENALTY * uncovered
+    subset_mean_penalty += FAIL_PENALTY * uncovered
     best_score_penalty += FAIL_PENALTY * uncovered
     expected_rejected_tasks += uncovered
     return {
         "prop_penalty": round(prop_penalty, 6),
         "seq_penalty": round(seq_penalty, 6),
         "uniform_penalty": round(uniform_penalty, 6),
+        "subset_mean_penalty": round(subset_mean_penalty, 6),
         "best_score_penalty": round(best_score_penalty, 6),
         "covered_tasks": len(used_tasks),
         "task_count": task_count,
@@ -360,6 +369,7 @@ def empty_metrics():
         "prop_penalty": 0.0,
         "seq_penalty": 0.0,
         "uniform_penalty": 0.0,
+        "subset_mean_penalty": 0.0,
         "best_score_penalty": 0.0,
         "covered_tasks": 0,
         "task_count": 0,
@@ -372,6 +382,35 @@ def empty_metrics():
         "violation_count": 1,
         "violations": "solver error",
     }
+
+
+def accepted_subset_mean_score(offers):
+    """Expected score if the winner is uniform among accepting couriers.
+
+    The online statement says multiple couriers may be offered the same order
+    and the first one to accept wins it.  There is no explicit arrival-time
+    model in the TSV, so this is a useful offline proxy between the optimistic
+    best-accepted model and the unconditional arithmetic mean model.
+    """
+
+    count = len(offers)
+    if count <= 0:
+        return 0.0
+    total = 0.0
+    for subset in range(1, 1 << count):
+        probability = 1.0
+        score_sum = 0.0
+        accepted = 0
+        for idx, item in enumerate(offers):
+            if subset & (1 << idx):
+                probability *= item["p"]
+                score_sum += item["score"]
+                accepted += 1
+            else:
+                probability *= max(0.0, min(1.0, 1.0 - item["p"]))
+        if accepted:
+            total += probability * (score_sum / accepted)
+    return total
 
 
 def normalize_task_key(value):

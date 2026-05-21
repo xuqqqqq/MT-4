@@ -1935,7 +1935,7 @@ def solve(input_text: str) -> list:
     score_std = math.sqrt(max(0.0, score_sq_sum / willingness_count - avg_score * avg_score)) if willingness_count else 0.0
     original_fail_penalty = FAIL_PENALTY
     if p.n_tasks >= 25 and p.n_tasks <= 32 and (len(p.all_couriers) >= p.n_tasks) and (avg_willingness < 0.071):
-        FAIL_PENALTY = 110.0
+        FAIL_PENALTY = 114.0
 
     def consider(groups, model=None, ensure_initial=True):
         if model is None:

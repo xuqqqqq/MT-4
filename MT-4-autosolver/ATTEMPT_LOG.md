@@ -412,3 +412,12 @@ Known stable-ish score profile:
 - Code change: replace `submission.py` and the desktop upload copy with the provided file byte-for-byte. The new floor introduces an agent wrapper, `by_mask_courier` cache, sparse uncovered LNS, and annealed single-task reassign neighborhoods.
 - Local evidence: the file compiles and parses under Python 3.5/3.6 AST. A local comparison confirms it changes high-noise/large/low/medium basins, but local proxy scores still do not fully explain the online gains, so the online score is treated as authoritative.
 - Decision: treat `代码.txt` / `710.71` as the new floor. Further changes should target remaining gaps (`low_willingness_seed501`, `scarce_couriers_seed401`, and high-noise) without disturbing the large/medium anneal paths.
+
+## Candidate Experiment: Objective Inference And Low Penalty 114
+
+- Trigger: user asked to infer the true online evaluator and stop repeating local hill-climbing attempts. The current bottleneck is no longer syntax/format, but proxy mismatch plus local-optimum funneling.
+- Objective inference: added `subset_mean_penalty` to the offline benchmark harness and `scripts/infer_objective_model.py` for raw, affine, leave-one-out, blend, and family-residual analysis. Combined online history says `uniform_penalty` and `prop_penalty` fit best overall, but family residuals are too large for a single universal proxy. The most plausible judge is still independent rejection probability `product(1-p_i)`, with an unknown first-accept winner score model.
+- Code change: for extreme low-willingness 25-32 task cases, change the construction-time `FAIL_PENALTY` from `110.0` to `114.0`. This is deliberately narrow: it only fires when `avg_willingness < 0.071`, with riders at least as many as tasks.
+- Local evidence: `calibrated_low_probe/low_willingness_seed501` improved from `prop=1781.382`, `seq=1739.043`, `offers=72`, hash `12e54d7a` to `prop=1773.875`, `seq=1738.379`, `offers=74`, hash `196c9af0`. Hidden-like low, high-noise, medium, large, scarce, small, and tiny stayed hash-stable in the guard run.
+- Rejected: scarce sparse-pool beam | it did not change hidden-like or calibrated scarce outputs and only added runtime. Low 5/6-group destroy-repair | checked thousands of repartitions and found no improving move. Public-large pair ejection LNS | lowered neither `prop` nor the likely online-aligned large objective.
+- Risk: a similar `114` low-band idea was an online no-op on an older branch, so this is a low-risk probe rather than a confident leaderboard jump.

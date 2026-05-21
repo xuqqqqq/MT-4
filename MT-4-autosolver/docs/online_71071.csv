@@ -1,0 +1,11 @@
+case,online_score,covered,task_count,elapsed_ms
+high_noise_seed601,496.43,30,30,8644
+large_seed301,661.00,40,40,6510
+large_seed302,628.48,40,40,6509
+low_willingness_seed501,1803.15,30,30,5770
+medium_seed201,485.90,30,30,8703
+medium_seed202,523.10,30,30,8373
+medium_seed203,499.76,30,30,9648
+scarce_couriers_seed401,1562.89,39,40,5762
+small_seed100,293.61,15,15,4526
+tiny_seed42,152.80,6,6,180

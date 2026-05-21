@@ -31,6 +31,7 @@ PROXY_COLUMNS = (
     "prop_penalty",
     "seq_penalty",
     "uniform_penalty",
+    "subset_mean_penalty",
     "best_score_penalty",
 )
 
