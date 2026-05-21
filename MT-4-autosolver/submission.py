@@ -260,6 +260,19 @@ def _group_value_prop(offers, task_count):
     avg_score = weighted_score / p_sum if p_sum > 0.0 else FAIL_PENALTY * task_count
     return (1.0 - reject_prob) * avg_score + reject_prob * FAIL_PENALTY * task_count
 
+def _group_value_uniform(offers, task_count):
+    if not offers:
+        return FAIL_PENALTY * task_count
+    reject_prob = 1.0
+    score_sum = 0.0
+    count = 0
+    for cand in offers:
+        reject_prob *= max(0.0, min(1.0, 1.0 - cand.p))
+        score_sum += cand.score
+        count += 1
+    avg_score = score_sum / count if count else FAIL_PENALTY * task_count
+    return (1.0 - reject_prob) * avg_score + reject_prob * FAIL_PENALTY * task_count
+
 def _prop_expected_value(p, state):
     value = 0.0
     covered = 0
@@ -276,6 +289,28 @@ def _prop_expected_value(p, state):
                 return 1e+100
             used_couriers.add(cand.courier)
         value += _group_value_prop(offers, offers[0].task_count)
+        covered += offers[0].task_count
+        for task_id in task_ids:
+            used_tasks.add(task_id)
+    value += FAIL_PENALTY * max(0, p.n_tasks - covered)
+    return value
+
+def _uniform_expected_value(p, state):
+    value = 0.0
+    covered = 0
+    used_tasks = set()
+    used_couriers = set()
+    for offers in state:
+        if not offers:
+            continue
+        task_ids = [t.strip() for t in offers[0].task_str.split(',')]
+        if any((t in used_tasks for t in task_ids)):
+            return 1e+100
+        for cand in offers:
+            if cand.courier in used_couriers:
+                return 1e+100
+            used_couriers.add(cand.courier)
+        value += _group_value_uniform(offers, offers[0].task_count)
         covered += offers[0].task_count
         for task_id in task_ids:
             used_tasks.add(task_id)
@@ -1465,6 +1500,101 @@ def _tabu_single_task_reassign(p, state, deadline, max_steps, group_limit, tenur
             output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
     return output
 
+def _tabu_single_task_reassign_uniform(p, state, deadline, max_steps, group_limit, tenure):
+    current = [list(offers) for offers in state if offers]
+    if len(current) < 8:
+        return current
+    group_count = len(current)
+    masks = [offers[0].mask for offers in current]
+    task_counts = [offers[0].task_count for offers in current]
+    values = [_group_value_uniform(current[i], task_counts[i]) for i in range(group_count)]
+    current_value = sum(values)
+    best_value = current_value
+    best_state = [list(offers) for offers in current]
+    tabu_until = {}
+    if group_limit <= 0 or group_limit > group_count:
+        group_limit = group_count
+    for step in range(max_steps):
+        if time.time() >= deadline:
+            break
+        active = list(range(group_count))
+        active.sort(key=lambda i: (-values[i], -len(current[i]), masks[i]))
+        active = active[:group_limit]
+        move = None
+        best_delta = 1e+100
+        for left in active:
+            if time.time() >= deadline:
+                break
+            if len(current[left]) <= 1:
+                continue
+            for left_pos, moving in enumerate(current[left]):
+                for right in active:
+                    if right == left:
+                        continue
+                    right_offer = p.by_mask_courier.get(masks[right], {}).get(moving.courier)
+                    if right_offer is None:
+                        continue
+                    left_offers = current[left][:left_pos] + current[left][left_pos + 1:]
+                    right_offers = current[right] + [right_offer]
+                    left_value = _group_value_uniform(left_offers, task_counts[left])
+                    right_value = _group_value_uniform(right_offers, task_counts[right])
+                    delta = left_value + right_value - values[left] - values[right]
+                    key = ('m', moving.courier, masks[left], masks[right])
+                    if tabu_until.get(key, -1) > step and current_value + delta >= best_value - 1e-09:
+                        continue
+                    if delta < best_delta:
+                        best_delta = delta
+                        move = ('m', left, right, moving, left_offers, right_offers, left_value, right_value)
+        for ai in range(len(active)):
+            if time.time() >= deadline:
+                break
+            left = active[ai]
+            for right in active[ai + 1:]:
+                for left_pos, left_cand in enumerate(current[left]):
+                    for right_pos, right_cand in enumerate(current[right]):
+                        new_left = p.by_mask_courier.get(masks[left], {}).get(right_cand.courier)
+                        new_right = p.by_mask_courier.get(masks[right], {}).get(left_cand.courier)
+                        if new_left is None or new_right is None:
+                            continue
+                        left_offers = list(current[left])
+                        right_offers = list(current[right])
+                        left_offers[left_pos] = new_left
+                        right_offers[right_pos] = new_right
+                        left_value = _group_value_uniform(left_offers, task_counts[left])
+                        right_value = _group_value_uniform(right_offers, task_counts[right])
+                        delta = left_value + right_value - values[left] - values[right]
+                        key = ('s', left_cand.courier, right_cand.courier, masks[left], masks[right])
+                        if tabu_until.get(key, -1) > step and current_value + delta >= best_value - 1e-09:
+                            continue
+                        if delta < best_delta:
+                            best_delta = delta
+                            move = ('s', left, right, left_cand, right_cand, left_offers, right_offers, left_value, right_value)
+        if move is None:
+            break
+        if move[0] == 'm':
+            _, left, right, moving, left_offers, right_offers, left_value, right_value = move
+            current[left] = left_offers
+            current[right] = right_offers
+            values[left] = left_value
+            values[right] = right_value
+            tabu_until[('m', moving.courier, masks[right], masks[left])] = step + tenure
+        else:
+            _, left, right, left_cand, right_cand, left_offers, right_offers, left_value, right_value = move
+            current[left] = left_offers
+            current[right] = right_offers
+            values[left] = left_value
+            values[right] = right_value
+            tabu_until[('s', right_cand.courier, left_cand.courier, masks[left], masks[right])] = step + tenure
+        current_value += best_delta
+        if current_value < best_value - 1e-09:
+            best_value = current_value
+            best_state = [list(offers) for offers in current]
+    output = []
+    for offers in best_state:
+        if offers:
+            output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
+    return output
+
 def _local_mask_subset_reassign_expected(p, state, deadline, model):
     current = [list(offers) for offers in state if offers]
     if model != 'prop' or len(current) < 3:
@@ -2428,6 +2558,17 @@ def solve(input_text: str) -> list:
                 if improved_value < before_value:
                     agent.bs = improved_state
                     agent.bv = _state_model_value(p, improved_state, tm)
+    if tm == 'prop' and p.n_tasks >= 36 and len(p.all_couriers) >= p.n_tasks and best[1] is not None and len(best[1]) <= 25 and time.time() < st + 8.95:
+        uniform_before = _uniform_expected_value(p, best[1])
+        prop_before = _state_model_value(p, best[1], tm)
+        uniform_deadline = min(st + 8.95, time.time() + 1.20)
+        if uniform_deadline > time.time() + 0.05:
+            improved_state = _tabu_single_task_reassign_uniform(p, best[1], uniform_deadline, 360, 25, 9)
+            uniform_after = _uniform_expected_value(p, improved_state)
+            prop_after = _state_model_value(p, improved_state, tm)
+            if uniform_after + 1e-09 < uniform_before and prop_after <= prop_before + 2.25:
+                agent.bs = improved_state
+                agent.bv = prop_after
     output = _state_to_output(best[1])
     FAIL_PENALTY = original_fail_penalty
     return output
