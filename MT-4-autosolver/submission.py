@@ -819,7 +819,7 @@ def _repair_sparse_uncovered_lns(p, state, deadline, model):
         ranked.append((best, idx))
     ranked.sort()
     ids = [idx for _, idx in ranked[:min(16, len(ranked))]]
-    for remove_count in (1, 2, 3, 4):
+    for remove_count in ((1, 2, 3, 4, 5) if _bit_count(missing) == 1 else (1, 2, 3, 4)):
         if time.time() >= deadline:
             break
         for combo in itertools.combinations(ids, remove_count):
@@ -1263,76 +1263,6 @@ def _anneal_single_task_reassign(p, state, deadline, seed, max_iters):
                     bs = [list(offers) for offers in current]
     output = []
     for offers in bs:
-        if offers:
-            output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
-    return output
-
-def _tabu_single_task_reassign(p, state, deadline, max_steps, group_limit, tenure):
-    current = [list(offers) for offers in state if offers]
-    if len(current) < 8 or len(p.all_couriers) < p.n_tasks:
-        return current
-    masks = [offers[0].mask for offers in current]
-    task_counts = [offers[0].task_count for offers in current]
-    values = [_group_value_prop(current[i], task_counts[i]) for i in range(len(current))]
-    current_value = sum(values)
-    best_value = current_value
-    best_state = [list(offers) for offers in current]
-    tabu_until = {}
-    group_count = len(current)
-    group_limit = min(group_limit if group_limit > 0 else group_count, group_count)
-    for step in range(max_steps):
-        if time.time() >= deadline:
-            break
-        order = list(range(group_count))
-        order.sort(key=lambda i: (-values[i], -len(current[i]), masks[i]))
-        active = order[:group_limit]
-        active_set = set(active)
-        for i in range(group_count):
-            if len(current[i]) > 1 and i not in active_set:
-                active.append(i)
-                active_set.add(i)
-                if len(active) >= group_limit + 4:
-                    break
-        move = None
-        best_delta = 1e+100
-        for left in active:
-            if time.time() >= deadline:
-                break
-            if len(current[left]) <= 1:
-                continue
-            left_mask = masks[left]
-            for left_pos, moving in enumerate(current[left]):
-                left_offers = current[left][:left_pos] + current[left][left_pos + 1:]
-                left_value = _group_value_prop(left_offers, task_counts[left])
-                for right in active:
-                    if right == left:
-                        continue
-                    right_offer = p.by_mask_courier.get(masks[right], {}).get(moving.courier)
-                    if right_offer is None:
-                        continue
-                    right_offers = current[right] + [right_offer]
-                    right_value = _group_value_prop(right_offers, task_counts[right])
-                    delta = left_value + right_value - values[left] - values[right]
-                    key = ('m', moving.courier, left_mask, masks[right])
-                    if tabu_until.get(key, -1) > step and current_value + delta >= best_value - 1e-09:
-                        continue
-                    if delta < best_delta:
-                        best_delta = delta
-                        move = (left, right, moving, left_offers, right_offers, left_value, right_value)
-        if move is None:
-            break
-        left, right, moving, left_offers, right_offers, left_value, right_value = move
-        current[left] = left_offers
-        current[right] = right_offers
-        values[left] = left_value
-        values[right] = right_value
-        tabu_until[('m', moving.courier, masks[right], masks[left])] = step + tenure
-        current_value += best_delta
-        if current_value < best_value - 1e-09:
-            best_value = current_value
-            best_state = [list(offers) for offers in current]
-    output = []
-    for offers in best_state:
         if offers:
             output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
     return output
@@ -2005,7 +1935,7 @@ def solve(input_text: str) -> list:
     score_std = math.sqrt(max(0.0, score_sq_sum / willingness_count - avg_score * avg_score)) if willingness_count else 0.0
     original_fail_penalty = FAIL_PENALTY
     if p.n_tasks >= 25 and p.n_tasks <= 32 and (len(p.all_couriers) >= p.n_tasks) and (avg_willingness < 0.071):
-        FAIL_PENALTY = 114.0
+        FAIL_PENALTY = 110.0
 
     def consider(groups, model=None, ensure_initial=True):
         if model is None:
@@ -2271,35 +2201,6 @@ def solve(input_text: str) -> list:
             if improved_value < best[0]:
                 best[0] = improved_value
                 best[1] = improved_state
-    tabu_refine = tm == 'prop' and len(p.all_couriers) >= p.n_tasks and ((p.n_tasks >= 36) or (very_low_willingness and p.n_tasks >= 25 and p.n_tasks <= 32))
-    if tabu_refine and time.time() < st + 8.85:
-        if p.n_tasks >= 36:
-            tabu_deadline = min(st + 8.95, time.time() + 1.30)
-            tabu_steps = 360
-            tabu_group_limit = 32
-            tabu_tenure = 9
-        else:
-            tabu_deadline = min(st + 8.35, time.time() + 0.62)
-            tabu_steps = 180
-            tabu_group_limit = 12
-            tabu_tenure = 7
-        if tabu_deadline > time.time() + 0.05:
-            if p.n_tasks >= 36:
-                improved_state = _tabu_single_task_reassign(p, best[1], tabu_deadline, tabu_steps, tabu_group_limit, tabu_tenure)
-                improved_value = _state_model_value(p, improved_state, tm)
-                if improved_value < best[0]:
-                    best[0] = improved_value
-                    best[1] = improved_state
-            else:
-                saved_fail_penalty = FAIL_PENALTY
-                FAIL_PENALTY = 100.0
-                before_value = _state_model_value(p, best[1], tm)
-                improved_state = _tabu_single_task_reassign(p, best[1], tabu_deadline, tabu_steps, tabu_group_limit, tabu_tenure)
-                improved_value = _state_model_value(p, improved_state, tm)
-                FAIL_PENALTY = saved_fail_penalty
-                if improved_value < before_value:
-                    agent.bs = improved_state
-                    agent.bv = _state_model_value(p, improved_state, tm)
     output = _state_to_output(best[1])
     FAIL_PENALTY = original_fail_penalty
     return output
