@@ -819,7 +819,7 @@ def _repair_sparse_uncovered_lns(p, state, deadline, model):
         ranked.append((best, idx))
     ranked.sort()
     ids = [idx for _, idx in ranked[:min(16, len(ranked))]]
-    for remove_count in ((1, 2, 3, 4, 5) if _bit_count(missing) == 1 else (1, 2, 3, 4)):
+    for remove_count in (1, 2, 3, 4):
         if time.time() >= deadline:
             break
         for combo in itertools.combinations(ids, remove_count):

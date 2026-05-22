@@ -468,3 +468,8 @@ Known stable-ish score profile:
 - Risk: this is a real structural neighborhood, not a fingerprint, but it still relies on the local proxy. The online scorer may value winner order differently, so keep this as one upload candidate rather than stacking unrelated risky experiments on top.
 - Online evidence: failed. The submitted candidate scored `711.65`, worse than the `710.71` floor. Regressions match the earlier fixed-mask tabu failure shape: `large_seed301 661.00 -> 664.19`, `large_seed302 628.48 -> 630.96`, and `medium_seed203 499.76 -> 503.46`; `low_willingness`, `medium201`, and `medium202` were unchanged despite large local proxy improvements.
 - Decision: remove the pair-rematching branch from `submission.py` and treat this whole family as closed for online submission. The decisive lesson is that local prop/uniform improvements from changing accepted pair grouping can be anti-correlated with the hidden scorer on large/medium rows. Keep the offline probes only as diagnostic tools, not as submitted path code.
+
+## Reset: Exact 710.71 Floor Before New Research
+- Trigger: the next phase is a clean restart with web/external research, so even the previously retained scarce-only micro expansion is removed from the submitted path.
+- Code change: make `submission.py` line-equivalent to `outputs/baseline_71071.py` again. This removes the unproven `remove_count=5` scarce repair probe as well as the failed pair-rematching branch.
+- Decision: all future experiments should branch from the exact online-proven `710.71` file, not from accumulated local-proxy probes.
