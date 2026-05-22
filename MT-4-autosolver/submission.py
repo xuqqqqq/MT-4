@@ -654,6 +654,117 @@ def _make_matching_grouping(p, mode, top_k, threshold, noise, seed, three_opt=Fa
                 used |= mask
     return _groups_key(groups)
 
+def _make_overlap_grouping(p, top_k, weight, threshold, noise, seed):
+    sv = {}
+    st = {}
+    for mask in p.single_masks:
+        vals = {}
+        ranked = []
+        for cand in p.by_mask.get(mask, []):
+            value = cand.p * (FAIL_PENALTY * cand.task_count - cand.score)
+            if value > 0.0:
+                vals[cand.courier] = value
+                ranked.append((value, cand.courier))
+        ranked.sort(reverse=True)
+        sv[mask] = vals
+        st[mask] = set(courier for _, courier in ranked[:top_k])
+    shared = {}
+    for mask in p.pair_masks:
+        bits = _bits(mask)
+        if len(bits) != 2:
+            continue
+        left = 1 << bits[0]
+        right = 1 << bits[1]
+        lv = sv.get(left, {})
+        rv = sv.get(right, {})
+        if not lv or not rv:
+            continue
+        value = len(st.get(left, set()) & st.get(right, set())) * FAIL_PENALTY * 0.03
+        for cand in p.by_mask.get(mask, []):
+            a = lv.get(cand.courier)
+            b = rv.get(cand.courier)
+            if a is None or b is None:
+                continue
+            pair_value = cand.p * (FAIL_PENALTY * cand.task_count - cand.score)
+            if pair_value > 0.0:
+                value += min(a, b, pair_value)
+        if value > 0.0:
+            shared[mask] = value
+    rnd = random.Random(seed)
+    edge_value = {}
+    edges = []
+    for mask in p.pair_masks:
+        bits = _bits(mask)
+        if len(bits) != 2:
+            continue
+        value = _matching_edge_value(p, mask, 'potential_half', top_k) + weight * shared.get(mask, 0.0)
+        edge_value[mask] = value
+        noisy = value + ((rnd.random() - 0.5) * noise if noise else 0.0)
+        edges.append((noisy, value, bits[0], bits[1], mask))
+    edges.sort(reverse=True)
+    mate = [-1] * p.n_tasks
+    for _, value, left, right, mask in edges:
+        if value < threshold:
+            continue
+        if mate[left] < 0 and mate[right] < 0:
+            mate[left] = right
+            mate[right] = left
+    improved = True
+    while improved:
+        improved = False
+        pairs = []
+        seen = set()
+        for i in range(p.n_tasks):
+            j = mate[i]
+            if j >= 0 and i not in seen and (j not in seen):
+                pairs.append((min(i, j), max(i, j)))
+                seen.add(i)
+                seen.add(j)
+        for a_idx in range(len(pairs)):
+            if improved:
+                break
+            a, b = pairs[a_idx]
+            old_one = 1 << a | 1 << b
+            for c_idx in range(a_idx + 1, len(pairs)):
+                c, d = pairs[c_idx]
+                old_two = 1 << c | 1 << d
+                old_value = edge_value.get(old_one, -1e+100) + edge_value.get(old_two, -1e+100)
+                alt_one = 1 << a | 1 << c
+                alt_two = 1 << b | 1 << d
+                alt_value = edge_value.get(alt_one, -1e+100) + edge_value.get(alt_two, -1e+100)
+                if alt_value > old_value + 1e-09:
+                    mate[a] = c
+                    mate[c] = a
+                    mate[b] = d
+                    mate[d] = b
+                    improved = True
+                    break
+                alt_one = 1 << a | 1 << d
+                alt_two = 1 << b | 1 << c
+                alt_value = edge_value.get(alt_one, -1e+100) + edge_value.get(alt_two, -1e+100)
+                if alt_value > old_value + 1e-09:
+                    mate[a] = d
+                    mate[d] = a
+                    mate[b] = c
+                    mate[c] = b
+                    improved = True
+                    break
+    groups = []
+    used = 0
+    for i in range(p.n_tasks):
+        j = mate[i]
+        if j > i:
+            mask = 1 << i | 1 << j
+            if mask in p.by_mask:
+                groups.append(mask)
+                used |= mask
+    for i in range(p.n_tasks):
+        mask = 1 << i
+        if not used & mask and mask in p.by_mask:
+            groups.append(mask)
+            used |= mask
+    return _groups_key(groups)
+
 def _candidate_saving_assignment(p):
     rows = []
     for mask, candidates in p.by_mask.items():
@@ -1981,6 +2092,14 @@ def solve(input_text: str) -> list:
                 p.potential_cache.clear()
                 p.single_offer_value_cache.clear()
                 consider_state(alt_sparse_state)
+    if tm == 'prop' and (not extreme_low_willingness) and p.n_tasks >= 25 and p.n_tasks <= 45 and len(p.all_couriers) >= max(p.n_tasks, 70):
+        overlap_configs = ((4, 0.3, 15.0, 20.0), (3, 0.3, -10.0, 20.0), (4, 0.5, 30.0, 20.0), (5, 0.15, -40.0, 20.0))
+        for top_k, weight, threshold, noise in overlap_configs:
+            if time.time() >= gd:
+                break
+            groups = _make_overlap_grouping(p, top_k, weight, threshold, noise, seed)
+            consider(groups, 'prop', False)
+            seed += 17
     if low_willingness and p.n_tasks >= 25 and (p.n_tasks <= 32) and (len(p.all_couriers) >= p.n_tasks):
         matching_configs = (('potential_half', 3, -80.0, 'prop', False), ('potential_raw', 3, -80.0, 'prop', False), ('potential_gain', 3, -80.0, 'prop', False), ('potential_half', 4, -80.0, 'prop', False), ('potential_raw', 4, -80.0, 'prop', False), ('potential_gain', 4, -80.0, 'prop', False), ('potential_half', 5, -80.0, 'prop', False), ('potential_gain', 5, -80.0, 'seq', False), ('potential_half', 4, 25.0, 'seq', False), ('potential_gain', 5, -120.0, 'prop', False), ('potential_gain', 5, -80.0, 'prop', False), ('potential_gain', 3, -40.0, 'prop', False))
         for mode, top_k, threshold, model, ensure_initial in matching_configs:
