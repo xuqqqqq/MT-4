@@ -1814,6 +1814,96 @@ def _local_repartition_four_expected(p, state, deadline, model):
             output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
     return output
 
+def _pair_dp_partition(p, released, pair_cost):
+    bits = _bits(released)
+    n = len(bits)
+    if n < 2 or n % 2 or n > 14:
+        return None
+    full = (1 << n) - 1
+    dp = {0: (0.0, ())}
+    for mask in range(full + 1):
+        item = dp.get(mask)
+        if item is None or mask == full:
+            continue
+        first = None
+        for i in range(n):
+            if not (mask & (1 << i)):
+                first = i
+                break
+        for j in range(first + 1, n):
+            if mask & (1 << j):
+                continue
+            pair = (1 << bits[first]) | (1 << bits[j])
+            if pair not in p.by_mask:
+                continue
+            nm = mask | (1 << first) | (1 << j)
+            nv = item[0] + pair_cost(pair)
+            old = dp.get(nm)
+            if old is None or nv < old[0]:
+                dp[nm] = (nv, item[1] + (pair,))
+    return dp.get(full, (None, None))[1]
+
+def _local_pair_rematch_expected(p, state, deadline, search_model, eval_model, max_groups, max_checks):
+    current = [list(offers) for offers in state if offers]
+    if len(current) < 5:
+        return current
+    best_value = _state_model_value(p, current, eval_model)
+    cost_cache = {}
+
+    def pair_cost(mask):
+        cached = cost_cache.get(mask)
+        if cached is None:
+            local = _greedy_expected_assignment(p, (mask,), search_model, False)
+            cached = _state_model_value(p, local, search_model) if local else 1e+80
+            cost_cache[mask] = cached
+        return cached
+
+    checked = 0
+    while time.time() < deadline and checked < max_checks:
+        ranked = []
+        for i, offers in enumerate(current):
+            if offers and _bit_count(offers[0].mask) == 2:
+                ranked.append((_state_model_value(p, [offers], search_model), i))
+        ranked.sort(reverse=True)
+        positions = [i for _, i in ranked]
+        improved = False
+        for size in range(min(max_groups, len(positions)), 2, -1):
+            if time.time() >= deadline or checked >= max_checks or improved:
+                break
+            top = positions[:min(len(positions), size + 5)]
+            for selected in itertools.combinations(top, size):
+                if time.time() >= deadline or checked >= max_checks:
+                    break
+                selected_set = set(selected)
+                released = 0
+                kept = []
+                old_parts = []
+                for i, offers in enumerate(current):
+                    mask = offers[0].mask
+                    if i in selected_set:
+                        released |= mask
+                        old_parts.append(mask)
+                    else:
+                        kept.append(mask)
+                new_parts = _pair_dp_partition(p, released, pair_cost)
+                if not new_parts or _groups_key(new_parts) == _groups_key(old_parts):
+                    continue
+                trial = _greedy_expected_assignment(p, _groups_key(kept + list(new_parts)), search_model, False)
+                checked += 1
+                value = _state_model_value(p, trial, eval_model)
+                if value + 1e-09 < best_value:
+                    current = trial
+                    best_value = value
+                    improved = True
+                    break
+        if not improved:
+            break
+    output = []
+    for offers in current:
+        if offers:
+            output.append(sorted(offers, key=lambda c: (c.score, -c.p, c.courier)))
+    return output
+
 def _state_to_output(state):
     assigned_couriers = set()
     assigned_tasks = set()
@@ -2060,6 +2150,25 @@ def solve(input_text: str) -> list:
         if improved_value < best[0]:
             best[0] = improved_value
             best[1] = improved_state
+    pair_rematch_refine = (tm == 'prop' and p.n_tasks >= 25 and p.n_tasks <= 32 and len(p.all_couriers) >= p.n_tasks and (avg_willingness > 0.34 or avg_willingness < 0.12))
+    large_pair_rematch = (tm == 'prop' and p.n_tasks >= 36 and p.n_tasks <= 42 and len(p.all_couriers) >= p.n_tasks and avg_willingness > 0.35 and score_std <= 20.5)
+    scarce_pair_rematch = scarce_couriers and p.n_tasks >= 35 and len(p.all_couriers) <= max(24, int(p.n_tasks * 0.65))
+    early_pair_rematch = (pair_rematch_refine and score_std > 20.5) or large_pair_rematch or scarce_pair_rematch
+    if early_pair_rematch and time.time() < deadline:
+        if p.n_tasks <= 32:
+            rematch_deadline = min(deadline, time.time() + (0.62 if score_std <= 20.5 else 0.34))
+            rematch_checks = 380 if score_std <= 20.5 else 260
+        elif large_pair_rematch:
+            rematch_deadline = min(deadline, time.time() + 0.95)
+            rematch_checks = 620
+        else:
+            rematch_deadline = min(deadline, time.time() + 0.75)
+            rematch_checks = 520
+        improved_state = _local_pair_rematch_expected(p, best[1], rematch_deadline, 'prop', tm, 7, rematch_checks)
+        improved_value = _state_model_value(p, improved_state, tm)
+        if improved_value < best[0]:
+            best[0] = improved_value
+            best[1] = improved_state
     tail_repartition = p.n_tasks <= 35 and len(p.all_couriers) >= p.n_tasks
     deep_tail_repartition = tail_repartition and (tb > 1.0 or p.n_tasks <= 20)
     single_offer_refine = tm == 'prop' and p.n_tasks >= 25 and (p.n_tasks <= 45) and (len(p.all_couriers) >= p.n_tasks) and (not very_low_willingness)
@@ -2181,6 +2290,14 @@ def solve(input_text: str) -> list:
                     best[1] = improved_state
             if best[0] >= before_value - 1e-09 or time.time() >= deadline:
                 break
+    if pair_rematch_refine and score_std <= 20.5:
+        late_deadline = min(st + 6.65, time.time() + 0.75)
+        if time.time() < late_deadline:
+            improved_state = _local_pair_rematch_expected(p, best[1], late_deadline, 'prop', tm, 7, 420)
+            improved_value = _state_model_value(p, improved_state, tm)
+            if improved_value < best[0]:
+                best[0] = improved_value
+                best[1] = improved_state
     if tm == 'prop' and p.n_tasks <= 20 and (len(p.all_couriers) >= p.n_tasks) and (time.time() < deadline):
         improved_state = _local_pair_subset_reassign_expected(p, best[1], min(deadline, time.time() + 1.35), tm)
         improved_value = _state_model_value(p, improved_state, tm)

@@ -256,7 +256,12 @@ def parse_candidates(text):
             "task_count": len(task_tuple),
         }
         rows.append(item)
-        candidate_by_key[(task_key, courier)] = item
+        key = (task_key, courier)
+        old = candidate_by_key.get(key)
+        if old is None or item["score"] < old["score"] or (
+            item["score"] == old["score"] and item["p"] > old["p"]
+        ):
+            candidate_by_key[key] = item
     return {
         "rows": rows,
         "task_ids": task_ids,
