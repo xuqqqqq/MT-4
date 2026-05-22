@@ -473,3 +473,13 @@ Known stable-ish score profile:
 - Trigger: the next phase is a clean restart with web/external research, so even the previously retained scarce-only micro expansion is removed from the submitted path.
 - Code change: make `submission.py` line-equivalent to `outputs/baseline_71071.py` again. This removes the unproven `remove_count=5` scarce repair probe as well as the failed pair-rematching branch.
 - Decision: all future experiments should branch from the exact online-proven `710.71` file, not from accumulated local-proxy probes.
+
+## Rejected Probe: Low Potential-Gain Tight Seed
+- Hypothesis: literature-backed assortment/top-k thinking plus the old calibrated note suggested trying one narrow low branch seed, `potential_gain/top_k=4/threshold=-10`, without changing tail search.
+- Local evidence: rejected before submission. On `outputs/hidden_like_cases/low_willingness_seed501`, this moved to a worse local basin (`prop 1488.280 -> 1491.227`, hash `e010f6a5 -> f0d22ba3`), while the dedicated `outputs/calibrated_low_probe` was unchanged (`1781.382`). Non-low hidden-like cases stayed unchanged.
+- Decision: do not add this seed to `submission.py`; the old note is stale relative to the exact `710.71` floor.
+
+## Rejected Probe: Extreme-Low Gate Tightening
+- Hypothesis: external dispatch literature favors avoiding noisy low-confidence offer sets; tightening `extreme_low_willingness` from `<0.18` to `<0.12` might prevent high-noise cases from entering the low-randomized matching block.
+- Local evidence: rejected as a submission change. On both `outputs/hidden_like_cases` and `outputs/calibrated_hidden_like_cases`, every output hash stayed unchanged after the threshold edit, including high-noise and low. This makes the edit an unproven online-only bet rather than a measured improvement.
+- Decision: restore `<0.18` and keep this only as a diagnostic note.
